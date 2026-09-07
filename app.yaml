@@ -2,9 +2,12 @@ name: purepak
 kind: node
 memory_mb: 512
 port: 4310
-database: true
-# Receipt images + SQLite live under PUREPAK_DATA_DIR; persist across restarts.
+# State is SQLite (Node built-in node:sqlite) + receipt images, all under
+# PUREPAK_DATA_DIR, which must be a durable mount (needs_persistent_storage).
 env:
-  PUREPAK_DATA_DIR: /var/lib/purepak
+  # Durable data dir (SQLite + receipt images). Path supplied at deploy time
+  # via env_overrides — it is a mount path, not a secret.
+  PUREPAK_DATA_DIR:
+    required: true
 domains:
   - purepak.zaindroid.me

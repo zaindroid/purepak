@@ -17,13 +17,16 @@ const ROLES = [
 
 (async () => {
   const browser = await puppeteer.launch({
-    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--force-device-scale-factor=1'],
   });
   const results = [];
   for (const role of ROLES) {
-    const page = await browser.newPage();
+    // isolated context per role so the previous role's localStorage token
+    // doesn't auto-restore and skip the login form
+    const ctx = await browser.createBrowserContext();
+    const page = await ctx.newPage();
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await page.goto(BASE + '/', { waitUntil: 'networkidle2', timeout: 30000 });
     // wait for the branded splash to finish its fade-out
@@ -45,6 +48,7 @@ const ROLES = [
       results.push({ role: role.label, login: false });
       await page.screenshot({ path: path.join(OUT, `${role.label}-LOGIN-FAIL.png`), fullPage: false });
       await page.close();
+      await ctx.close();
       continue;
     }
     results.push({ role: role.label, login: true });
@@ -74,9 +78,11 @@ const ROLES = [
       await page.close === route ? null : null;
     }
     await page.close();
+    await ctx.close();
   }
-  await browser.close();
+  // write report even if a later role crashed, so partial progress is kept
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(results, null, 2));
+  await browser.close();
   const bad = results.filter(r => r.route && r.overflow > 0);
   console.log(`\n${results.length} screens checked, ${bad.length} with horizontal overflow:\n`);
   for (const b of bad) console.log(`  ${b.role}/${b.route}: overflow=${b.overflow}px offenders=${JSON.stringify(b.bad.slice(0,4))}`);

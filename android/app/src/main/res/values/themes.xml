@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="pp_blue">#0A4D8C</color>
+    <color name="pp_blue_dark">#083A6B</color>
+    <color name="pp_accent">#2196F3</color>
+    <color name="pp_bg">#F1F5FB</color>
+    <color name="pp_text">#0D1B2A</color>
+    <color name="pp_muted">#64748B</color>
+    <color name="white">#FFFFFF</color>
+
+    <style name="Theme.PurePak" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/pp_blue</item>
+        <item name="colorPrimaryDark">@color/pp_blue_dark</item>
+        <item name="colorAccent">@color/pp_accent</item>
+        <item name="android:windowBackground">@color/pp_bg</item>
+        <item name="android:statusBarColor">@color/pp_blue</item>
+        <item name="android:navigationBarColor">@color/white</item>
+        <item name="android:textColorPrimary">@color/pp_text</item>
+    </style>
+</resources>

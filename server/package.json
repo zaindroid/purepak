@@ -1,0 +1,11 @@
+{
+  "name": "purepak-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PurePak mineral water operations backend (orders, deliveries, agents/commissions, bookkeeping)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node seed.js"
+  }
+}

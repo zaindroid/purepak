@@ -1,0 +1,62 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.purepak.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.purepak.app"
+        minSdk 24
+        targetSdk 34
+        versionCode 5
+        versionName "1.5"
+    }
+
+    signingConfigs {
+        release {
+            def kp = System.getenv("PUREPAK_KEYSTORE_PASS")
+            if (kp == null || kp.isEmpty()) {
+                throw new GradleException(
+                    "PUREPAK_KEYSTORE_PASS environment variable is required for release builds.")
+            }
+            storeFile rootProject.file("../keystore/purepak-release.jks")
+            storePassword kp
+            keyAlias "purepak"
+            keyPassword kp
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            aaptOptions {
+                // keep the receipt-image provider paths
+                noCompress "jpg"
+            }
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    // release must not warn about unused resources during lint gate
+    lint {
+        checkReleaseBuilds true
+        abortOnError true
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core:1.12.0'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+}

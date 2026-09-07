@@ -1,0 +1,23 @@
+# node
+node_modules
+package-lock.json
+
+# local runtime data (never ship databases/receipts to the repo)
+server/data/
+server/*.log
+
+# Android build output
+android/.gradle
+android/build
+android/app/build
+android/local.properties
+keystore/
+
+# test artifacts
+webtest/shots
+webtest/phone-audit
+*.apk
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,10 @@
+name: purepak
+kind: node
+memory_mb: 512
+port: 4310
+database: true
+# Receipt images + SQLite live under PUREPAK_DATA_DIR; persist across restarts.
+env:
+  PUREPAK_DATA_DIR: /var/lib/purepak
+domains:
+  - purepak.zaindroid.me

@@ -26,11 +26,18 @@ const ROLES = [
     const page = await browser.newPage();
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await page.goto(BASE + '/', { waitUntil: 'networkidle2', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 1200)); // splash out
+    // wait for the branded splash to finish its fade-out
+    await page.waitForFunction(
+      () => {
+        const s = document.getElementById('splash');
+        return !s || s.classList.contains('hidden') || s.classList.contains('bye');
+      }, { timeout: 15000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 500));
     // login
+    await page.waitForSelector('#loginEmail', { visible: true, timeout: 10000 });
     await page.type('#loginEmail', role.user);
     await page.type('#loginPass', 'purepak123');
-    await page.click('#loginForm button[type=submit]');
+    await page.evaluate(() => document.querySelector('#loginForm button[type=submit]').click());
     await page.waitForSelector('#app:not(.hidden)', { timeout: 15000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 1500));
     const loggedIn = await page.evaluate(() => !document.getElementById('app').classList.contains('hidden'));

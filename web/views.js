@@ -448,10 +448,19 @@ let smartRoute = { plan: null, myPos: null, notified: new Set() };
 
 async function viewSmartRoute() {
   const role = API.user.role;
-  // Load current plan (depot-based) first; upgrade to GPS when the rider taps "My location"
+  // Load current plan (depot-based) first; upgrade to GPS when the rider taps "My location".
+  // A 200 whose body fails JSON.parse (or is transiently empty/aborted) resolves to null
+  // inside req(), so guard + retry instead of dereferencing a possibly-null plan.
+  const EMPTY_PLAN = { sequence: [], start: { lat: 33.61, lng: 73.07 }, open_count: 0 };
   smartRoute = { plan: null, myPos: null, notified: new Set() };
-  smartRoute.plan = await API.routePlan(null, null);
-  const plan = smartRoute.plan;
+  let plan = null;
+  for (let i = 0; i < 3 && !plan; i++) {
+    if (i) await new Promise(r => setTimeout(r, 250));
+    try { plan = await API.routePlan(null, null); } catch { plan = null; }
+    if (plan && !Array.isArray(plan.sequence)) plan = null;
+  }
+  smartRoute.plan = plan || EMPTY_PLAN;
+  plan = smartRoute.plan;
   const top3 = plan.sequence.slice(0, 3);
   return `
   <div class="page-head"><h1>Smart route</h1><button class="btn sm" data-act="reroute">${IC.locate} Optimize</button></div>
@@ -524,7 +533,10 @@ function smartStopCard(s, idx, compact) {
 async function initSmartRoute() {
   const el = document.getElementById('routeMap');
   if (!el || !window.L) return;
-  const plan = smartRoute.plan;
+  const plan = smartRoute && smartRoute.plan;
+  // Guard the render race: if a re-render ran while the plan fetch was still
+  // in flight (or failed), don't crash on a null sequence.
+  if (!plan || !Array.isArray(plan.sequence) || !plan.start) return;
   const start = plan.start;
   const pts = [start, ...plan.sequence.map(s => [s.lat, s.lng])];
   const map = L.map(el, { zoomControl: true, attributionControl: true });
@@ -594,6 +606,10 @@ async function rerouteFromMyLocation() {
     const pos = await new Promise((res, rej) =>
       navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 15000 }));
     const p = await API.routePlan(pos.coords.latitude, pos.coords.longitude);
+    if (!p || !Array.isArray(p.sequence)) {
+      setMsg('Could not load the route, tap Optimize to retry');
+      return;
+    }
     smartRoute.plan = p;
     smartRoute.notified = new Set();
     const el = document.getElementById('routeMap');
@@ -739,7 +755,7 @@ async function viewFinanceDashboard() {
     ${V.kpiCard('Receivable', API.fmtMoney(dueOrders.reduce((s, o) => s + (o.total - o.paid), 0)), dueOrders.length + ' open orders', 'warn')}
     ${V.kpiCard('Agent dues', API.fmtMoney(dueAgents), 'unsettled commissions', 'warn')}
   </div>
-  <div class="grid" style="grid-template-columns:1.4fr 1fr;margin-top:14px">
+  <div class="grid grid-2col" style="margin-top:14px">
     <div class="card">
       <div class="card-head"><h2>Cash flow · 6 months</h2></div>
       <div class="card-pad">

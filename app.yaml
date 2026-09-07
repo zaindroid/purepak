@@ -1,7 +1,7 @@
 name: purepak
 kind: node
 memory_mb: 512
-port: 4310
+port: 8080
 # SQLite (node:sqlite) + receipt images live in this durable mount, created by
 # the platform as a named volume so state survives container restarts/redeploys.
 persistent_storage:

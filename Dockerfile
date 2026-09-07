@@ -8,7 +8,7 @@ COPY server/ ./server/
 COPY web/    ./web/
 
 ENV NODE_ENV=production \
-    PORT=4310 \
+    PORT=8080 \
     PUREPAK_DATA_DIR=/var/lib/purepak
 
 # Pre-create the data dir owned by the runtime user. When the platform mounts
@@ -18,9 +18,11 @@ ENV NODE_ENV=production \
 RUN mkdir -p /var/lib/purepak/receipts \
     && chown -R node:node /var/lib/purepak
 
-EXPOSE 4310
+EXPOSE 8080
 
 # run as non-root
 USER node
 
-CMD ["node", "server/server.js"]
+# --experimental-sqlite: keeps node:sqlite working across Node 22 point
+# releases (no-op warning on versions where it's already unflagged).
+CMD ["node", "--experimental-sqlite", "server/server.js"]

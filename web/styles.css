@@ -18,9 +18,13 @@
   --font:'Inter',-apple-system,system-ui,'Segoe UI',Roboto,sans-serif;
 }
 *{box-sizing:border-box}
-html,body{margin:0;height:100%}
+/* kill the Android WebView "blurred grey dot" that flashes under every tap;
+   real feedback comes from the :active states defined per component */
+*,*::before,*::after{-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;-webkit-tap-highlight-color:transparent}
 body{font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;font-size:14.5px;line-height:1.45}
-button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit;-webkit-tap-highlight-color:transparent}
+button:focus:not(:focus-visible){outline:none}
 input,select,textarea{font:inherit}
 .hidden{display:none!important}
 #splash,.splash{position:fixed;inset:0;overflow:hidden;background:linear-gradient(160deg,#083a6b,#0a4d8c 45%,#2196f3);z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff}
@@ -673,12 +677,13 @@ body.has-cartbar .shop{padding-bottom:150px}
 .wa-fab{
   position:fixed;right:14px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:29;
   width:46px;height:46px;border-radius:50%;display:grid;place-items:center;
-  background:#25D366;color:#fff;
-  box-shadow:0 0 0 3px var(--bg),0 8px 20px rgba(37,211,102,.4);
+  background:#25D366;color:#fff;border:2px solid #fff;
+  box-shadow:0 4px 12px rgba(8,20,35,.22);
   transition:transform .16s var(--ease);
 }
 @media(hover:hover){ .wa-fab:hover{transform:scale(1.06)} }
-.wa-fab svg{width:25px;height:25px}
+.wa-fab:active{transform:scale(.94)}
+.wa-fab svg{width:24px;height:24px;display:block}
 body.has-cartbar .wa-fab{bottom:calc(80px + env(safe-area-inset-bottom))}
 
 /* sticky basket bar */

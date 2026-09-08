@@ -35,18 +35,35 @@ const nodeFetch = globalThis.fetch;
   window.eval(combined);
   await sleep(700);
 
-  function login(email) {
+  // wait for a DOM predicate, polling every 80ms
+  function waitFor(pred, label, ms = 9000) {
     return new Promise((resolve, reject) => {
-      document.getElementById('loginEmail').value = email;
-      document.getElementById('loginPass').value = 'purepak123';
-      try { document.getElementById('loginForm').requestSubmit(); }
-      catch { document.getElementById('loginForm').dispatchEvent(new window.Event('submit', { cancelable: true, bubbles: true })); }
       const t0 = Date.now();
       const iv = setInterval(() => {
-        if (!document.getElementById('login').classList.contains('hidden')) { clearInterval(iv); resolve(); }
-        else if (Date.now() - t0 > 9000) { clearInterval(iv); reject(new Error('login timeout ' + email)); }
+        let ok = false;
+        try { ok = pred(); } catch { ok = false; }
+        if (ok) { clearInterval(iv); resolve(); }
+        else if (Date.now() - t0 > ms) { clearInterval(iv); reject(new Error(label)); }
       }, 80);
     });
+  }
+  const loggedIn = () => document.getElementById('login').classList.contains('hidden')
+    && !document.getElementById('app').classList.contains('hidden');
+
+  async function logout() {
+    document.getElementById('topLogout').click();
+    await waitFor(() => !document.getElementById('login').classList.contains('hidden'), 'logout timeout');
+  }
+
+  async function login(email) {
+    // don't submit until the login form is actually on screen
+    await waitFor(() => !document.getElementById('login').classList.contains('hidden'), 'login form never shown for ' + email);
+    document.getElementById('loginEmail').value = email;
+    document.getElementById('loginPass').value = 'purepak123';
+    try { document.getElementById('loginForm').requestSubmit(); }
+    catch { document.getElementById('loginForm').dispatchEvent(new window.Event('submit', { cancelable: true, bubbles: true })); }
+    // resolve only once the app view is actually up (login POST + enter() done)
+    await waitFor(loggedIn, 'login timeout ' + email);
   }
 
   const roleRoutes = {
@@ -76,7 +93,7 @@ const nodeFetch = globalThis.fetch;
   let firstLogin = true;
   for (const role of ['admin', 'finance', 'agent', 'delivery', 'customer']) {
     try {
-      if (!firstLogin) { document.getElementById('topLogout').click(); await sleep(400); }
+      if (!firstLogin) await logout();
       firstLogin = false;
       await login(emails[role]);
       check('login ' + role, true);

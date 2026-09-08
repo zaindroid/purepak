@@ -293,9 +293,11 @@ function seedDemo(db) {
     [1, 0, [[12000, 4], [19000, 1]], 12, 'delivered', 1.0],
     [2, 1, [[1500, 24]], 9, 'in_delivery', 0.5],
     [3, 1, [[19000, 4]], 6, 'confirmed', 0.0],
-    [4, 2, [[6000, 6], [12000, 2]], 3, 'new', 0.0],
+    // keep at least one paid sale in the current calendar month regardless of the
+    // day the demo is seeded, so month-to-date revenue / KPIs are never a flat 0
+    [4, 2, [[6000, 6], [12000, 2]], 3, 'delivered', 1.0],
     [0, 0, [[12000, 2]], 1, 'new', 0.0],
-    [2, 1, [[19000, 2], [6000, 4]], 0, 'confirmed', 0.0],
+    [2, 1, [[19000, 2], [6000, 4]], 0, 'confirmed', 1.0],
   ];
 
   let incomeTotal = 0;

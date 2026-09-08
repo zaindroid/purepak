@@ -396,7 +396,7 @@ async function handleApi(req, res, url) {
     if (!evUser) {
       const qtok = url.searchParams.get('token');
       // reuse the same 'Bearer ' prefix authUser() compares against
-      if (qtok) evUser = authUser({ headers: { authorization: 'Bearer '.replace(' ', ' ') + qtok } });
+      if (qtok) evUser = authUser({ headers: { authorization: 'Bearer ' + qtok } });
     }
     if (!evUser) return err(res, 401, 'Not authenticated');
     return sseOpen(evUser.id, res);
@@ -738,8 +738,9 @@ async function handleApi(req, res, url) {
     {
       const targets = new Set(staffUserIds().filter(x => x !== user.id));
       if (agentId) {
-        const ag = db.prepare('SELECT user_id FROM agents WHERE id=?').get(agentId);
-        if (ag && ag.user_id) targets.add(ag.user_id);
+        // the agent's login account is a users row that points back at this agent
+        const ag = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(agentId);
+        if (ag && ag.id !== user.id) targets.add(ag.id);
       }
       notify([...targets], 'order', 'New order received', `New water order · ${items.length} item(s) · Rs ${total} total`);
     }

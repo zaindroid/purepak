@@ -51,11 +51,11 @@ input,select,textarea{font:inherit}
 }
 .icon-btn{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:18px;color:var(--ink-2)}
 .icon-btn:active{background:var(--blue-50)}
-.topbar-brand{display:flex;align-items:center;gap:8px;font-weight:800}
+.topbar-brand{display:flex;align-items:center;gap:8px;font-weight:800;margin-right:auto}
 .brand-logo{width:30px;height:30px;border-radius:8px;background:#fff;padding:2.5px;box-shadow:0 1px 4px rgba(8,20,35,.12)}
 .login-logo{display:block;width:78px;height:78px;margin:0 auto 10px;border-radius:18px;background:#fff;padding:9px;box-shadow:0 8px 24px rgba(8,20,35,.14)}
 .brand-name{font-size:17px;letter-spacing:-.3px;color:var(--blue-900)}
-.top-logout{margin-left:auto}
+.top-logout{margin-left:0} /* brand pushes these to the right as a group */
 .icon-btn svg{display:block}
 .shell{display:flex;min-height:calc(100dvh - 52px)}
 
@@ -232,7 +232,7 @@ table.mini-items tr.tot td{border-bottom:none;border-top:1.5px solid var(--ink);
 .team-row{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:10px}
 .team-av{width:38px;height:38px;border-radius:11px;background:var(--slate-bg);color:var(--slate-ink);display:grid;place-items:center;font-weight:800;font-size:15px;flex:none}
 .team-col, .team-main{flex:1 1 auto;min-width:0;overflow:hidden}
-.team-col .nm, .team-main .nm{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.team-col .nm, .team-main .nm{font-weight:700;font-size:14px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;line-height:1.35}
 .team-col .sub, .team-main .sub{font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 .team-foot{margin-top:9px;display:flex;flex-direction:column;gap:7px;align-items:flex-start}
 .team-sal{font-weight:800;font-size:13px;white-space:nowrap}

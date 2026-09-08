@@ -234,8 +234,8 @@ async function modalOrderDetail(id) {
   const payPct = o.total ? Math.round((o.paid / o.total) * 100) : 0;
   let actions = '';
   if (role === 'admin' || role === 'agent') {
-    if (o.status === 'new') actions += `<button class="btn primary" data-act="dispatch" data-id="${o.id}">Confirm & dispatch</button>`;
-    if (o.status === 'confirmed') actions += `<button class="btn primary" data-act="dispatch" data-id="${o.id}">Dispatch (out for delivery)</button>`;
+    if (o.status === 'new') actions += `<button class="btn primary" data-act="dispatch" data-id="${o.id}" data-status="confirmed">Confirm order</button>`;
+    if (o.status === 'confirmed') actions += `<button class="btn primary" data-act="dispatch" data-id="${o.id}" data-status="in_delivery">Dispatch for delivery</button>`;
     if (['new', 'confirmed', 'in_delivery'].includes(o.status)) actions += `<button class="btn danger" data-act="cancel-order" data-id="${o.id}">Cancel</button>`;
   }
   if ((role === 'admin' || role === 'finance') && o.payment_status !== 'paid') {
@@ -1427,7 +1427,9 @@ async function viewTeam() {
   const isRoot = u.role === 'admin';
   const all = await API.users();
   const agents = all.filter(r => r.role === 'agent');
-  const rows = all.filter(r => r.role !== 'agent')
+  // Team = employees only. Customers have their own page; agents are shown as a
+  // summary chip strip below (managed in Commission agents).
+  const rows = all.filter(r => r.role !== 'agent' && r.role !== 'customer')
     .sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1) || a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
   const pending = rows.filter(r => r.status === 'pending');
   const active = rows.filter(r => r.status === 'active');
@@ -1440,7 +1442,7 @@ async function viewTeam() {
   return `<div class="page-head"><h1>Team</h1>
     <button class="btn primary sm" data-act="add-employee">+ Add employee</button></div>
     <div class="grid kpis" style="margin-top:14px">
-      <div class="card kpi"><div class="k-label">Employees</div><div class="k-val">${active.filter(r => r.role !== 'customer').length}</div></div>
+      <div class="card kpi"><div class="k-label">Employees</div><div class="k-val">${active.length}</div></div>
       <div class="card kpi warn"><div class="k-label">Awaiting activation</div><div class="k-val">${pending.length}</div></div>
       <div class="card kpi"><div class="k-label">Monthly payroll</div><div class="k-val">Rs ${Math.round(monthly).toLocaleString('en-PK')}</div></div>
     </div>
@@ -1485,7 +1487,7 @@ function modalAddEmployee() {
   const u = API.user;
   const isRoot = u.role === 'admin';
   const roles = [
-    ['employee', 'Employee (office / general staff)'], ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'], ['customer', 'Customer'],
+    ['employee', 'Employee (office / general staff)'], ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'],
     ...(isRoot ? [['manager', 'Manager'], ['admin', 'Admin']] : []),
   ];
   openModal('Add employee', `

@@ -73,6 +73,12 @@ const App = {
       if (el) this.act(el.dataset, e);
       setMenu(false); // any tap on the content area also closes the drawer
     });
+    // modals live in #modalRoot (outside #view) — their action buttons need the
+    // same delegation or e.g. the order "Confirm / Dispatch" buttons do nothing
+    document.getElementById('modalRoot').addEventListener('click', (e) => {
+      const el = e.target.closest('[data-act]');
+      if (el) this.act(el.dataset, e);
+    });
     document.getElementById('view').addEventListener('change', (e) => {
       if (e.target.id === 'payPeriod' && typeof setPayPeriod === 'function') {
         setPayPeriod(e.target.value);
@@ -412,10 +418,15 @@ const App = {
       case 'filter-orders': stop(); this.route = 'orders'; this.ctx = { status };
         if (status === 'all') location.hash = '#/orders'; else location.hash = '#/orders/' + status; break;
       case 'filter-deliveries': stop(); if (status === 'all') location.hash = '#/deliveries'; else location.hash = '#/deliveries/' + status; break;
-      case 'dispatch': stop();
-        try { await API.updateOrder(+id, { status: 'in_delivery' }); this.toast('Order dispatched'); closeModal(); this.refresh(); }
-        catch (e) { this.toast(e.message, 'bad'); }
-        break;
+      case 'dispatch': stop(); {
+        // status carries the exact next state ("confirmed" then "in_delivery")
+        const next = status || 'in_delivery';
+        try {
+          await API.updateOrder(+id, { status: next });
+          this.toast(next === 'confirmed' ? 'Order confirmed' : next === 'in_delivery' ? 'Order dispatched' : 'Order updated');
+          closeModal(); this.refresh();
+        } catch (e) { this.toast(e.message, 'bad'); }
+      } break;
       case 'cancel-order': stop();
         if (await confirmDialog({ title: 'Cancel order', message: 'This order will be marked cancelled. The customer will see the change.', okLabel: 'Cancel order', danger: true })) {
           try { await API.updateOrder(+id, { status: 'cancelled' }); this.toast('Order cancelled'); closeModal(); this.refresh(); }

@@ -8,6 +8,10 @@ const { init, verifyPassword, hashPassword } = require('./db');
 const PORT = Number(process.env.PORT || 4310);
 const { db } = init();
 const WEB_ROOT = path.join(__dirname, '..', 'web');
+// receipt images live under the data dir (a mounted volume in production) — the
+// SAME path must be used to write, read and delete them, or images 404.
+const DATA_DIR = process.env.PUREPAK_DATA_DIR || path.join(__dirname, 'data');
+const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
 const SESSIONS = new Map(); // token -> {user, createdAt}
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -235,10 +239,13 @@ const PUREPAK_RECEIPT_PROMPT = [
   'Respond with ONLY the JSON object. No markdown, no prose, no code fences.',
 ].join('\n');
 
+// resolved once: settings key wins, else GEMINI_API_KEY env (set via the platform)
+function geminiKey() { return setting('gemini_api_key') || process.env.GEMINI_API_KEY || null; }
+
 async function extractReceipt(apiKey, imagePath) {
   const b64 = fs.readFileSync(imagePath).toString('base64');
   const ext = imagePath.endsWith('.png') ? 'png' : 'jpeg';
-  const model = setting('gemini_model') || 'gemini-3.6-flash';
+  const model = setting('gemini_model') || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + encodeURIComponent(apiKey);
   const body = {
     contents: [{
@@ -522,7 +529,7 @@ async function handleApi(req, res, url) {
                             VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(name, email, phone, hashPassword(password), role, salary, agentId, custId, status);
     const u = db.prepare('SELECT * FROM users WHERE id=?').get(Number(ur.lastInsertRowid));
-    notify(staffUserIds(), 'team', 'New employee added',
+    notify(staffUserIds().filter(x => x !== user.id), 'team', 'New employee added',
       name + ' added as ' + role + ' by ' + user.name + '.' + (status === 'pending' ? ' Activate them from Team.' : ''), 'user#' + u.id);
     return json(res, 201, userView(u));
   }
@@ -626,7 +633,7 @@ async function handleApi(req, res, url) {
       b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
       +parts[2]);
     if (b.price !== undefined && Number(b.price) >= 0 && Number(b.price) !== cur.price)
-      notify(staffUserIds(), 'pricing', 'Base price changed',
+      notify(staffUserIds().filter(x => x !== user.id), 'pricing', 'Base price changed',
         cur.name + ' base price ' + cur.price + ' → ' + Number(b.price) + ' (by ' + user.name + ').', 'product#' + cur.id);
     sseBroadcast('pricing'); // price / availability change reaches every open shop live
     return json(res, 200, db.prepare('SELECT * FROM products WHERE id=?').get(+parts[2]));
@@ -713,7 +720,7 @@ async function handleApi(req, res, url) {
       n++;
     }
     if (n) {
-      notify(staffUserIds(), 'pricing', 'Price list updated',
+      notify(staffUserIds().filter(x => x !== user.id), 'pricing', 'Price list updated',
         n + ' price override(s) updated by ' + user.name + '. Applies to new orders.');
       // every signed-in account (customers see their own type's prices, agents/
       // staff see the matrix) gets the refreshed price list in realtime
@@ -940,7 +947,7 @@ async function handleApi(req, res, url) {
       b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
       +parts[2]);
     if (pct !== cur.commission_pct)
-      notify(staffUserIds(), 'team', 'Agent commission updated',
+      notify(staffUserIds().filter(x => x !== user.id), 'team', 'Agent commission updated',
         cur.name + ' commission ' + cur.commission_pct + '% → ' + pct + '% (applies to new orders, by ' + user.name + ').', 'agent#' + cur.id);
     // keep the agent's linked user record name in sync
     if (b.name != null && String(b.name).trim()) {
@@ -1098,7 +1105,7 @@ async function handleApi(req, res, url) {
     const imageB64 = String(b.image || '');
     if (!imageB64 || imageB64.length < 1000) return err(res, 400, 'image data required');
     // save image
-    const RECDIR = path.join(process.env.PUREPAK_DATA_DIR || path.join(__dirname, 'data'), 'receipts');
+    const RECDIR = RECEIPTS_DIR;
     if (!fs.existsSync(RECDIR)) fs.mkdirSync(RECDIR, { recursive: true });
     const safe = String(b.filename || 'receipt').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
     const r = db.prepare('INSERT INTO receipts(filename,kind,amount,vendor,memo,recorded_by,ocr_status) VALUES (?,?,?,?,?,?,?)')
@@ -1108,7 +1115,7 @@ async function handleApi(req, res, url) {
     fs.writeFileSync(path.join(RECDIR, rid + '_' + safe + '.' + ext), decodeB64(imageB64));
 
     // run Gemini OCR (best-effort; receipt stays pending/searchable regardless)
-    const key = setting('gemini_api_key');
+    const key = geminiKey();
     if (key) {
       extractReceipt(key, path.join(RECDIR, rid + '_' + safe + '.' + ext))
         .then(out => {
@@ -1117,12 +1124,16 @@ async function handleApi(req, res, url) {
           // tell the review team a new scan is waiting in staging
           const rc2 = db.prepare('SELECT status, vendor, amount FROM receipts WHERE id=?').get(rid);
           if (rc2 && rc2.status === 'pending') {
-            notify(staffUserIds(), 'receipt', `New receipt #${rid} awaiting review`,
+            notify(staffUserIds().filter(x => x !== user.id), 'receipt', `New receipt #${rid} awaiting review`,
               `${out.vendor || rc2.vendor || 'Receipt'} · Rs ${out.amount != null ? out.amount : (rc2.amount != null ? rc2.amount : '—')} scanned by ${user.name} — verify & approve in Receipts.`, 'receipt#' + rid);
           }
         })
-        .catch(() => db.prepare(`UPDATE receipts SET ocr_status='failed' WHERE id=?`).run(rid));
+        .catch((e) => {
+          console.error('receipt OCR failed #' + rid + ':', e && e.message);
+          db.prepare(`UPDATE receipts SET ocr_status='failed' WHERE id=?`).run(rid);
+        });
     } else {
+      console.warn('receipt #' + rid + ' saved without OCR — no Gemini API key (set one in Settings or GEMINI_API_KEY)');
       db.prepare(`UPDATE receipts SET ocr_status='failed' WHERE id=?`).run(rid);
     }
     return json(res, 201, db.prepare('SELECT * FROM receipts WHERE id=?').get(rid));
@@ -1164,7 +1175,7 @@ async function handleApi(req, res, url) {
     requireRole(user || (SESSIONS.get(imgToken) && SESSIONS.get(imgToken).user), ['admin', 'manager', 'finance', 'agent', 'delivery']);
     const rc = db.prepare('SELECT * FROM receipts WHERE id=?').get(+parts[2]);
     if (!rc) return err(res, 404, 'Receipt not found');
-    const dir = path.join(__dirname, 'data', 'receipts');
+    const dir = RECEIPTS_DIR;
     const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
     const f = files.find(x => x.startsWith(rc.id + '_'));
     if (!f) return err(res, 404, 'Image not found');
@@ -1196,7 +1207,7 @@ async function handleApi(req, res, url) {
     if (b.extracted !== undefined) changes.push('line items');
     const who = rc.recorded_by ? ` sent by ${rc.recorded_by}` : '';
     const summary = changes.length ? `Approved with changes: ${changes.join(', ')}.` : 'Approved as scanned.';
-    const targets = [...new Set([...staffUserIds(), ...db.prepare('SELECT id FROM users WHERE name=?').all(rc.recorded_by || '').map(r => r.id)])];
+    const targets = [...new Set([...staffUserIds(), ...db.prepare('SELECT id FROM users WHERE name=?').all(rc.recorded_by || '').map(r => r.id)])].filter(x => x !== user.id);
     notify(targets, 'receipt', `Receipt #${rid} approved${who}`,
       `${vendor || 'Receipt'} · Rs ${amount}${memo ? ' · ' + memo : ''} — ${summary}`, 'receipt#' + rid);
     return json(res, 200, db.prepare('SELECT * FROM receipts WHERE id=?').get(rid));
@@ -1210,12 +1221,12 @@ async function handleApi(req, res, url) {
     const b = await readBody(req);
     const reason = b.reason ? String(b.reason).trim() : 'No reason given';
     db.prepare('DELETE FROM receipts WHERE id=?').run(rid);
-    const dir = path.join(__dirname, 'data', 'receipts');
+    const dir = RECEIPTS_DIR;
     if (fs.existsSync(dir)) {
       fs.readdirSync(dir).filter(f => f.startsWith(rid + '_')).forEach(f => { try { fs.unlinkSync(path.join(dir, f)); } catch { /* ignore */ } });
     }
     const who = rc.recorded_by ? ` sent by ${rc.recorded_by}` : '';
-    notify([...new Set([...staffUserIds(), ...db.prepare('SELECT id FROM users WHERE name=?').all(rc.recorded_by || '').map(r => r.id)])],
+    notify([...new Set([...staffUserIds(), ...db.prepare('SELECT id FROM users WHERE name=?').all(rc.recorded_by || '').map(r => r.id)])].filter(x => x !== user.id),
       'receipt', `Receipt #${rid} rejected${who}`,
       `${rc.vendor || 'Receipt'} · Rs ${rc.amount != null ? rc.amount : '—'} — rejected by ${user.name}: ${reason}`, 'receipt#' + rid);
     return json(res, 200, { ok: true });
@@ -1256,6 +1267,8 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       gemini_api_key: setting('gemini_api_key') ? maskKey(setting('gemini_api_key')) : null,
       gemini_model: setting('gemini_model') || null,
+      ocr_ready: !!geminiKey(),
+      ocr_source: setting('gemini_api_key') ? 'settings' : (process.env.GEMINI_API_KEY ? 'env' : null),
     });
   }
   if (method === 'GET' && parts[1] === 'settings' && parts.length === 2) {
@@ -1263,6 +1276,8 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       gemini_api_key: setting('gemini_api_key') ? maskKey(setting('gemini_api_key')) : null,
       gemini_model: setting('gemini_model') || null,
+      ocr_ready: !!geminiKey(),
+      ocr_source: setting('gemini_api_key') ? 'settings' : (process.env.GEMINI_API_KEY ? 'env' : null),
     });
   }
 

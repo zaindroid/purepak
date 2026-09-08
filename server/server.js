@@ -1273,6 +1273,31 @@ async function handleApi(req, res, url) {
 }
 
 // ---------- static web ----------
+// One token per running container (mtime of the app files). It's appended to the
+// app JS/CSS URLs inside index.html at serve time so a new deploy always busts
+// any CDN/browser copy of the previous build — the #1 "why is my fix not live"
+// gotcha behind Cloudflare, which edge-caches static extensions by default.
+const ASSET_VER = (() => {
+  let m = 0;
+  for (const f of ['index.html', 'styles.css', 'api.js', 'views.js', 'app.js']) {
+    try { m = Math.max(m, fs.statSync(path.join(WEB_ROOT, f)).mtimeMs); } catch {}
+  }
+  return String(Math.floor(m) || Date.now());
+})();
+function withAssetVer(html) {
+  return String(html).replace(/\b(src|href)="((?:api|views|app)\.js|styles\.css)"/g,
+    `$1="$2?v=${ASSET_VER}"`);
+}
+function staticHeaders(ext, p) {
+  // app shell (our own html/js/css) revalidates every load so a deploy is never
+  // masked by a stale CDN copy; third-party bundles and media cache for a day.
+  const vendored = /^\/(vendor|img)\//.test(p || '');
+  const noCache = !vendored && (ext === '.html' || ext === '.js' || ext === '.css');
+  return {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Cache-Control': noCache ? 'no-cache' : 'public, max-age=86400',
+  };
+}
 function serveStatic(req, res, url) {
   let p = url.pathname === '/' ? '/index.html' : url.pathname;
   const file = path.normalize(path.join(WEB_ROOT, p));
@@ -1283,11 +1308,12 @@ function serveStatic(req, res, url) {
       const idx = path.join(WEB_ROOT, 'index.html');
       return fs.readFile(idx, (e2, d2) => {
         if (e2) { res.writeHead(404); return res.end('Not found'); }
-        res.writeHead(200, { 'Content-Type': MIME['.html'] }); res.end(d2);
+        res.writeHead(200, staticHeaders('.html', '/index.html')); res.end(withAssetVer(d2));
       });
     }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-    res.end(data);
+    const ext = path.extname(file);
+    res.writeHead(200, staticHeaders(ext, p));
+    res.end(ext === '.html' ? withAssetVer(data) : data);
   });
 }
 

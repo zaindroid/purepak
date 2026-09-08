@@ -86,28 +86,36 @@ async function openStream(token) {
   check('admin customer create accepted', res.status === 201);
   check('agent got live "customer" push on customer create', await agentStream.waitFor('customer'));
 
-  // customer places an order -> admin's board updates live + it lands in the office feed
+  // customer places an order -> office refreshes + office feed gets it, but
+  // OTHER customers' screens must stay completely still.
   const adminStream = await openStream(adminTok);
+  const otherCustTok = await login('sana@funloft.pk');
+  const otherCustStream = await openStream(otherCustTok);
   await sleep(300);
-  adminStream.buf = '';
+  adminStream.buf = ''; otherCustStream.buf = ''; custStream.buf = '';
   const beforeUnread = (await apiAs(adminTok, 'GET', '/notifications')).body.unread || 0;
   res = await apiAs(custTok, 'POST', '/orders', { items: [{ product_id: 2, qty: 3 }] });
   check('customer order placed', res.status === 201, JSON.stringify(res.body));
-  check('admin board got live "order" push', await adminStream.waitFor('order'));
+  check('office board got live "order" push', await adminStream.waitFor('order'));
+  check('another customer gets NO push when someone else orders', !(await otherCustStream.waitFor('order', 1500)));
+  check('the ordering customer is not spammed with a push either', !(await custStream.waitFor('order', 500)));
   await sleep(200);
   const now = (await apiAs(adminTok, 'GET', '/notifications')).body;
   check('new order lands in admin notification feed',
     (now.unread || 0) > beforeUnread && now.notifications.some(n => n.kind === 'order' && /Rascon/.test(n.body || '')),
     JSON.stringify(now.notifications && now.notifications[0]));
-  // manager + finance get it too
   for (const who of ['manager@purepak.pk', 'finance@purepak.pk']) {
     const t = await login(who);
     const nf = (await apiAs(t, 'GET', '/notifications')).body;
     check(who.split('@')[0] + ' also notified of the new order',
       nf.notifications.some(n => n.kind === 'order' && /Rascon/.test(n.body || '')));
   }
+  // a customer never gets an order notification for someone else's order
+  const oc = (await apiAs(otherCustTok, 'GET', '/notifications')).body;
+  check('other customer feed untouched by the order',
+    !oc.notifications.some(n => n.kind === 'order' && /Rascon/.test(n.body || '')));
 
-  custStream.close(); agentStream.close(); adminStream.close();
+  custStream.close(); agentStream.close(); adminStream.close(); otherCustStream.close();
 
   // ---------- 2. customer storefront (jsdom) ----------
   let html = readFileSync(path.join(W, 'index.html'), 'utf8')
@@ -157,11 +165,14 @@ async function openStream(token) {
   // live price change while items are in the basket -> reprices in place, keeps basket + scroll
   const before = c0().querySelector('.prod-now').textContent;
   await apiAs(adminTok, 'POST', '/pricing', [{ product_id: +firstPid, customer_type: 'wholesale', price: 999 }]);
-  await window.App.quietRefresh();
+  await window.refreshStorefrontPrices();   // what the 'pricing' SSE event triggers
   await sleep(100);
   check('storefront reprices in place on a live update', /999/.test(c0().querySelector('.prod-now').textContent),
     `${before} -> ${c0().querySelector('.prod-now').textContent}`);
-  check('basket survives the live re-render', c0().classList.contains('in-cart') && !document.getElementById('shopCartBar').hidden);
+  check('reprice patches cards only — no page rebuild', view.querySelector('.shop-hero') && view.querySelectorAll('.prod').length > 0);
+  check('basket survives the live reprice', c0().classList.contains('in-cart') && !document.getElementById('shopCartBar').hidden);
+  check('cart bar total reflects the new price', /1[,.]?998/.test(document.getElementById('shopCartTotal').textContent),
+    document.getElementById('shopCartTotal').textContent); // 2 x Rs 999
 
   // checkout -> order modal prefilled with the basket
   view.querySelector('[data-shop="checkout"]').click();

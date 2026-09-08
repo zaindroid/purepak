@@ -819,6 +819,36 @@ const sizeLabel = (ml) => ml >= 1000
   ? (Number.isInteger(ml / 1000) ? ml / 1000 : (ml / 1000).toFixed(1)) + ' L'
   : ml + ' ml';
 
+const prodEff = (p) => (typeof p.effective_price === 'number' ? p.effective_price : p.price);
+function prodPriceHtml(p) {
+  const eff = prodEff(p);
+  const save = Math.max(0, Math.round((p.price || 0) - eff));
+  return `
+    <div class="prod-price">
+      <span class="prod-now">${API.fmtMoney(eff)}</span>
+      ${save > 0 ? `<span class="prod-was">${API.fmtMoney(p.price)}</span>` : ''}
+      <span class="prod-per">/ bottle</span>
+    </div>
+    ${save > 0 ? `<span class="save-badge">You save ${API.fmtMoney(save)}</span>`
+              : `<span class="save-badge ghost">Fresh from the plant</span>`}`;
+}
+// Live price update WITHOUT rebuilding the page: patch each card's price block
+// in place (called on a 'pricing' SSE event). No view swap, no scroll change.
+async function refreshStorefrontPrices() {
+  if (!window.App || App.route !== 'home') return;
+  let products;
+  try { products = await API.products(); } catch { return; }
+  for (const p of products) {
+    const cardEl = document.querySelector(`.prod[data-pid="${p.id}"]`);
+    if (!cardEl) continue;
+    cardEl.dataset.price = prodEff(p);
+    const box = cardEl.querySelector('.prod-pricing');
+    if (box) box.innerHTML = prodPriceHtml(p);
+  }
+  if (typeof applyCartToDom === 'function') applyCartToDom(); // re-total the cart bar
+}
+window.refreshStorefrontPrices = refreshStorefrontPrices; // called from app.js on a 'pricing' SSE event
+
 // in-memory basket for the shop; survives SSE-driven re-renders of the page
 const shopCart = new Map(); // productId -> qty
 let _shopWired = false;
@@ -830,29 +860,24 @@ async function viewCustomerHome() {
   const popId = (products.find(p => p.size_ml === 19000) || products.slice().sort((a, b) => b.size_ml - a.size_ml)[0] || {}).id;
   const last = orders[0];
 
-  const card = (p) => {
-    const eff = typeof p.effective_price === 'number' ? p.effective_price : p.price;
-    const save = Math.max(0, Math.round((p.price || 0) - eff));
-    return `
-    <article class="prod${p.id === popId ? ' is-pop' : ''}" data-pid="${p.id}" data-price="${eff}">
+  const card = (p) => `
+    <article class="prod${p.id === popId ? ' is-pop' : ''}" data-pid="${p.id}" data-price="${prodEff(p)}">
       ${p.id === popId ? `<span class="prod-pop">${IC.badge} Most ordered</span>` : ''}
       <div class="prod-ic">${p.size_ml >= 6000 ? IC.bottleBig : IC.bottle}</div>
-      <div class="prod-nm">${API.esc(p.name)}</div>
-      <div class="prod-sz">${sizeLabel(p.size_ml)} bottle</div>
-      <div class="prod-price">
-        <span class="prod-now">${API.fmtMoney(eff)}</span>
-        ${save > 0 ? `<span class="prod-was">${API.fmtMoney(p.price)}</span>` : ''}
-        <span class="prod-per">/ bottle</span>
+      <div class="prod-body">
+        <div class="prod-nm">${API.esc(p.name)}</div>
+        <div class="prod-sz">${sizeLabel(p.size_ml)} bottle</div>
+        <div class="prod-pricing">${prodPriceHtml(p)}</div>
       </div>
-      ${save > 0 ? `<span class="save-badge">You save ${API.fmtMoney(save)}</span>` : '<span class="save-badge ghost">Fresh from the plant</span>'}
-      <button class="btn primary block prod-add" data-shop="add" data-pid="${p.id}">Add to order</button>
-      <div class="qty-step" data-pid="${p.id}">
-        <button data-shop="dec" data-pid="${p.id}" aria-label="Remove one">−</button>
-        <span data-qty="${p.id}">0</span>
-        <button data-shop="inc" data-pid="${p.id}" aria-label="Add one">+</button>
+      <div class="prod-cta">
+        <button class="btn primary block prod-add" data-shop="add" data-pid="${p.id}">Add to order</button>
+        <div class="qty-step" data-pid="${p.id}">
+          <button data-shop="dec" data-pid="${p.id}" aria-label="Remove one">−</button>
+          <span data-qty="${p.id}">0</span>
+          <button data-shop="inc" data-pid="${p.id}" aria-label="Add one">+</button>
+        </div>
       </div>
     </article>`;
-  };
 
   return `
   <section class="shop-hero">

@@ -561,15 +561,18 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
 .shop-cat-head h2{margin:0;font-size:18px;font-weight:800;letter-spacing:-.01em}
 .shop-cat-head .muted{font-size:12px}
 
-.prod-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+/* mobile-first: an even two-up flow. Flexbox (not grid) so an odd last card
+   can go full-width instead of leaving a hole. */
+.prod-grid{display:flex;flex-wrap:wrap;gap:10px}
 .prod{
+  flex:1 1 calc(50% - 5px);max-width:calc(50% - 5px);min-width:0;
   position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;
   background:var(--card);border:1px solid var(--line-2);border-radius:16px;
-  box-shadow:var(--shadow);padding:18px 14px 14px;
+  box-shadow:var(--shadow);padding:16px 12px 12px;
   transition:transform .16s var(--ease),box-shadow .16s var(--ease),border-color .16s var(--ease);
 }
 @media(hover:hover){ .prod:hover{transform:translateY(-2px);box-shadow:0 12px 30px rgba(16,42,83,.12)} }
-.prod.is-pop{border-color:var(--blue-500);box-shadow:0 10px 28px rgba(33,150,243,.18);padding-top:26px}
+.prod.is-pop{border-color:var(--blue-500);box-shadow:0 10px 28px rgba(33,150,243,.18);padding-top:24px}
 .prod-pop{
   position:absolute;top:-11px;left:50%;transform:translateX(-50%);
   display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
@@ -578,22 +581,26 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
 }
 .prod-pop svg{width:12px;height:12px}
 .prod-ic{
-  width:52px;height:52px;border-radius:16px;display:grid;place-items:center;
+  width:48px;height:48px;flex:none;border-radius:14px;display:grid;place-items:center;
   background:linear-gradient(135deg,var(--blue-100),var(--teal-bg));color:var(--blue-800);margin-bottom:8px;
 }
-.prod-ic svg{width:26px;height:26px}
-.prod-nm{font-weight:800;font-size:14px;letter-spacing:-.01em}
-.prod-sz{font-size:12px;color:var(--ink-3);margin-top:2px}
-.prod-price{display:flex;align-items:baseline;justify-content:center;gap:6px;flex-wrap:wrap;margin-top:8px}
-.prod-now{font-size:19px;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
+.prod-ic svg{width:24px;height:24px}
+/* body grows to fill the (equal-height) card so the CTA always sits flush at the bottom */
+.prod-body{display:flex;flex-direction:column;align-items:center;width:100%;flex:1 1 auto}
+.prod-nm{font-weight:800;font-size:13.5px;line-height:1.25;letter-spacing:-.01em}
+.prod-sz{font-size:11.5px;color:var(--ink-3);margin-top:2px}
+.prod-pricing{display:flex;flex-direction:column;align-items:center;margin-top:8px}
+.prod-price{display:flex;align-items:baseline;justify-content:center;gap:6px;flex-wrap:wrap}
+.prod-now{font-size:18px;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
 .prod-was{font-size:12px;color:var(--ink-3);text-decoration:line-through}
 .prod-per{font-size:11px;color:var(--ink-3)}
 .save-badge{
-  margin-top:7px;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;
+  margin-top:6px;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:99px;
   background:var(--green-bg);color:var(--green-ink);
 }
 .save-badge.ghost{background:var(--slate-bg);color:var(--ink-3);font-weight:600}
-.prod-add,.prod .qty-step{margin-top:auto}
+.prod-cta{width:100%;margin-top:12px}
+.prod-cta .btn,.prod-add{width:100%}
 .prod .qty-step{
   display:none;width:100%;align-items:center;justify-content:space-between;
   border:1px solid #bfdcf7;border-radius:10px;overflow:hidden;
@@ -606,6 +613,11 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
 }
 .qty-step button:active{background:var(--blue-100)}
 .qty-step span{flex:1;font-weight:800;font-size:15px}
+
+/* odd product count -> last card spans the full row (same layout, just wider)
+   so there is never a lone half-width card with an empty gap beside it */
+.prod-grid .prod:last-child:nth-child(odd){flex-basis:100%;max-width:100%}
+.prod-grid .prod:last-child:nth-child(odd) .prod-cta{max-width:300px;margin-left:auto;margin-right:auto}
 
 .shop-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 2px 2px;margin-bottom:6px}
 .shop-foot .btn{gap:8px}
@@ -646,7 +658,6 @@ body.has-cartbar .wa-fab{bottom:calc(84px + env(safe-area-inset-bottom))}
 body.has-cartbar .content{padding-bottom:88px}
 @media (min-width:861px){ .cartbar{left:232px} }
 @media (max-width:860px){
-  .prod-grid{grid-template-columns:repeat(2,1fr)}
   .shop-hero h1{font-size:20px}
   .shop-hero-logo img{width:52px;height:52px}
   .shop-strip{gap:10px 12px}

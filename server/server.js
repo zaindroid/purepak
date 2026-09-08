@@ -362,15 +362,23 @@ function sseSend(userId, event) {
   const payload = `event: ${event}\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
   for (const res of set) { try { res.write(payload); } catch {} }
 }
-// Portal-wide changes (price list, catalog, customer records) affect what every
-// signed-in account sees — fan the event out to every open stream so their view
-// refetches live, not just the staff who happen to get a bell notification.
+function sseSendMany(userIds, event) {
+  for (const id of new Set(userIds.filter(Boolean))) sseSend(id, event);
+}
+// Truly portal-wide changes only: the PRICE LIST. Every signed-in account sees
+// prices (customers their own, staff the matrix), so a price edit legitimately
+// refreshes every open shop. Order / customer events are targeted (sseSendMany)
+// so one customer's order never disturbs another customer's screen.
 function sseBroadcast(event, exceptUserId) {
   const payload = `event: ${event}\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
   for (const [uid, set] of SSE) {
     if (uid === exceptUserId) continue;
     for (const res of set) { try { res.write(payload); } catch {} }
   }
+}
+function officeUserIds() {
+  // company accounts + every agent's login — the people who act on orders/customers
+  return db.prepare(`SELECT id FROM users WHERE status='active' AND (role IN ('admin','manager','finance') OR agent_id IS NOT NULL)`).all().map(r => r.id);
 }
 function sseOpen(userId, res) {
   res.writeHead(200, {
@@ -642,7 +650,7 @@ async function handleApi(req, res, url) {
     const type = types.includes(b.type) ? b.type : 'retail';
     const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type) VALUES (?,?,?,?,?,?,?)')
       .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type);
-    sseBroadcast('customer');
+    sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
     return json(res, 201, db.prepare('SELECT * FROM customers WHERE id=?').get(r.lastInsertRowid));
   }
   if (method === 'PATCH' && parts[1] === 'customers' && parts.length === 3 && !isNaN(+parts[2])) {
@@ -660,10 +668,12 @@ async function handleApi(req, res, url) {
         b.area !== undefined ? (b.area || null) : cur.area,
         b.type && types.includes(b.type) ? b.type : cur.type,
         +parts[2]);
-    sseBroadcast('customer');
-    // a customer-type change reprices that customer's whole catalog — make their
-    // own shop (and any staff order screen) reflect it immediately
-    if (b.type && types.includes(b.type) && b.type !== cur.type) sseBroadcast('pricing');
+    sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
+    // a customer-type change reprices that ONE customer's catalog — nudge only their shop
+    if (b.type && types.includes(b.type) && b.type !== cur.type) {
+      const cu = db.prepare('SELECT id FROM users WHERE customer_id=?').get(+parts[2]);
+      if (cu) sseSend(cu.id, 'pricing');
+    }
     return json(res, 200, db.prepare('SELECT * FROM customers WHERE id=?').get(+parts[2]));
   }
 
@@ -771,7 +781,8 @@ async function handleApi(req, res, url) {
       notify([...targets], 'order', 'New order received',
         `${cust.name} · ${units} bottle(s) · Rs ${total}`, 'order#' + orderId);
     }
-    sseBroadcast('order'); // every open order board / dashboard refreshes live
+    // nudge only the office + agents to refresh their boards — NOT other customers
+    sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
     return json(res, 201, db.prepare(Q.orders + ' WHERE o.id=?').get(orderId));
   }
   if (method === 'PATCH' && parts[1] === 'orders' && parts.length === 3 && !isNaN(+parts[2])) {
@@ -820,7 +831,8 @@ async function handleApi(req, res, url) {
       else if (inc < 0) db.prepare('INSERT INTO ledger(account,type,amount,ref,memo,at) VALUES (?,?,?,?,?,?)')
         .run('Cash / Bank', 'expense', -inc, 'order#' + oid, 'Payment refund', new Date().toISOString().slice(0, 19).replace('T', ' '));
     }
-    sseBroadcast('order'); // status / payment change reaches the customer + every staff board live
+    // the customer is notified in the block above; refresh the office + agents only
+    sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
     return json(res, 200, db.prepare(Q.orders + ' WHERE o.id=?').get(oid));
   }
 
@@ -885,7 +897,8 @@ async function handleApi(req, res, url) {
         next === 'delivered' ? `Order #${cur.order_id} delivered` : `Order #${cur.order_id} delivery failed`,
         null, `order#${cur.order_id}`);
     }
-    sseBroadcast('order'); // driver route, dispatch board, customer order list all refresh live
+    // customer notified above on delivered/failed; refresh the office + agents only
+    sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
     return json(res, 200, db.prepare('SELECT * FROM deliveries WHERE id=?').get(did));
   }
 

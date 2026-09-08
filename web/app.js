@@ -223,33 +223,26 @@ const App = {
   bellStart() {
     this.bellStop();
     this._startSSE();
-    // SSE gives instant updates; these polls are the safety net for when the
-    // stream is blocked (Cloudflare / corporate proxies drop EventSource) so
-    // other accounts still see new orders + price changes without a manual reload.
-    this.bellTimer = setInterval(() => this.bellUpdate(true).catch(() => {}), 45000);
-    this.liveTimer = setInterval(() => {
-      if (document.visibilityState !== 'visible') return;
-      this.bellUpdate(true).catch(() => {});
-      this.quietRefresh().catch(() => {});
-    }, 12000);
-    if (!this._liveFocusBound) {
-      this._liveFocusBound = () => {
-        if (document.visibilityState !== 'visible') return;
-        this.bellUpdate(true).catch(() => {});
-        this.quietRefresh().catch(() => {});
+    // Poll the bell as a safety net for when the SSE stream is blocked
+    // (Cloudflare / corporate proxies drop EventSource). This only touches the
+    // notification badge — it never rebuilds the page.
+    this.bellTimer = setInterval(() => this.bellUpdate(true).catch(() => {}), 30000);
+    if (!this._bellFocusBound) {
+      this._bellFocusBound = () => {
+        if (document.visibilityState === 'visible') this.bellUpdate(true).catch(() => {});
       };
-      window.addEventListener('focus', this._liveFocusBound);
-      document.addEventListener('visibilitychange', this._liveFocusBound);
+      window.addEventListener('focus', this._bellFocusBound);
+      document.addEventListener('visibilitychange', this._bellFocusBound);
     }
     this.bellUpdate().catch(() => {});
   },
   bellStop() {
     if (this.bellTimer) { clearInterval(this.bellTimer); this.bellTimer = null; }
-    if (this.liveTimer) { clearInterval(this.liveTimer); this.liveTimer = null; }
     this._stopSSE();
   },
-  // Open one SSE stream; on any event, refresh the bell badge and the view that's
-  // on screen so multi-account team operations appear in (near) realtime.
+  // One SSE stream per session. A realtime event updates the notification bell;
+  // it does NOT re-render the current view — the only visible live change is the
+  // storefront repricing itself in place on a 'pricing' event.
   _startSSE() {
     this._stopSSE();
     let es;
@@ -259,27 +252,19 @@ const App = {
     if (API.token) u.searchParams.set('token', API.token);
     try { es = new EventSource(u.toString()); } catch { return; }
     this._es = es;
-    const bump = () => {
+    const onEvent = (name) => {
       this.bellUpdate(true).catch(() => {});
-      // refresh the current view in place (debounced so a burst of events = one
-      // refresh); quietRefresh keeps scroll position and skips the crossfade so a
-      // live price / order update doesn't yank the page around.
-      if (this._viewRefreshTimer) return;
-      this._viewRefreshTimer = setTimeout(() => {
-        this._viewRefreshTimer = null;
-        if (API.user) this.quietRefresh().catch(() => {});
-      }, 300);
+      if (name === 'pricing' && typeof window.refreshStorefrontPrices === 'function') {
+        window.refreshStorefrontPrices().catch(() => {});
+      }
     };
-    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer'].forEach(ev => {
-      es.addEventListener(ev, bump);
-      // EventSource 'message' fallback for untyped events
-    });
-    es.addEventListener('message', bump);
+    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer'].forEach(ev =>
+      es.addEventListener(ev, () => onEvent(ev)));
+    es.addEventListener('message', () => onEvent('message'));
     es.addEventListener('error', () => { /* EventSource auto-reconnects; no-op */ });
   },
   _stopSSE() {
     if (this._es) { try { this._es.close(); } catch {} this._es = null; }
-    if (this._viewRefreshTimer) { clearTimeout(this._viewRefreshTimer); this._viewRefreshTimer = null; }
   },
   async bellUpdate(silent) {
     const u = API.user;
@@ -386,7 +371,6 @@ const App = {
       if (settled) return;
       settled = true;
       queued = { html, isError };
-      if (!isError) this._lastHtml = html; // baseline for quietRefresh's diff
       if (swapped) applySwap(); // fast render finished before the fade-out window
     };
     try {
@@ -398,33 +382,6 @@ const App = {
       paint(`<div class="empty" style="padding:60px 16px"><div class="em-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>${API.esc(e.message)}</div>`, true);
       console.error(e);
     }
-  },
-
-  // Silent, in-place re-render for realtime updates: same data → no DOM churn;
-  // changed data → swap without the crossfade and without losing scroll position.
-  // Skipped while a modal is open so it never pulls a form out from under the user.
-  async quietRefresh() {
-    const u = API.user;
-    if (!u) return;
-    if (document.getElementById('modalRoot') && document.getElementById('modalRoot').children.length) return;
-    const parts = this.hashRoute().split('/');
-    const valid = navFor(u.role).map(n => n.to);
-    let route = parts[0] || valid[0];
-    if (!valid.includes(route)) route = valid[0];
-    const renderer = (VIEW[u.role] && VIEW[u.role][route]) || VIEW.admin[route];
-    if (!renderer) return;
-    let html;
-    try { html = await renderer({ status: parts[1] || '' }); } catch { return; }
-    const view = document.getElementById('view');
-    if (!view || html === this._lastHtml) return;
-    this._lastHtml = html;
-    this.route = route;
-    this.ctx = { status: parts[1] || '' };
-    const y = window.scrollY;
-    if (typeof clearViewFx === 'function') clearViewFx();
-    view.innerHTML = html;
-    window.scrollTo({ top: y, behavior: 'auto' });
-    if (typeof window.onViewRender === 'function') window.onViewRender(route, view);
   },
 
   refresh() { this.render(); },

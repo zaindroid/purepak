@@ -370,10 +370,45 @@ async function viewOrders({ status = '' } = {}) {
   const roles = ['admin', 'agent', 'customer', 'finance', 'employee'];
   if (!roles.includes(API.user.role)) return '';
   const orders = await API.orders(status);
-  const filters = API.user.role === 'customer' ? [] : ['all', 'new', 'confirmed', 'in_delivery', 'delivered', 'cancelled'];
-  const canOrder = ['admin', 'agent', 'customer'].includes(API.user.role);
+
+  // ---- customer: a clean card list, not a data table ----
+  if (API.user.role === 'customer') {
+    const k = await API.kpis().catch(() => ({}));
+    const due = k.due || 0;
+    const openOrders = orders.filter(o => !['delivered', 'cancelled'].includes(o.status)).length;
+    return `
+  <div class="page-head"><h1>My orders</h1>
+    <button class="btn primary sm" data-act="nav" data-to="home">Order water</button></div>
+  <div class="ord-summary">
+    <div><b>${orders.length}</b><span>total orders</span></div>
+    <div><b>${openOrders}</b><span>in progress</span></div>
+    <div class="${due > 0 ? 'due' : ''}"><b>${API.fmtMoney(due)}</b><span>${due > 0 ? 'balance due' : 'all paid'}</span></div>
+  </div>
+  <div class="ord-list">
+    ${orders.map(o => {
+      const bal = Math.round((o.total - o.paid) * 100) / 100;
+      return `
+      <button class="ord-card" data-act="view-order" data-id="${o.id}">
+        <div class="ord-top">
+          <span class="ord-id">Order #${o.id}</span>
+          ${V.chip(o.status)}
+        </div>
+        <div class="ord-items">${API.esc(o.items || '—')}</div>
+        <div class="ord-bot">
+          <span class="ord-date">${API.fmtDay(o.placed_at)}</span>
+          <span class="ord-total">${API.fmtMoney(o.total)}</span>
+        </div>
+        ${bal > 0 && o.status !== 'cancelled'
+          ? `<div class="ord-due">Balance ${API.fmtMoney(bal)} &middot; ${API.statusLabel(o.payment_status)}</div>` : ''}
+      </button>`;
+    }).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.box}</div>No orders yet — tap “Order water” to place your first.</div>`}
+  </div>`;
+  }
+
+  const filters = ['all', 'new', 'confirmed', 'in_delivery', 'delivered', 'cancelled'];
+  const canOrder = ['admin', 'agent'].includes(API.user.role);
   return `
-  <div class="page-head"><h1>${API.user.role === 'customer' ? 'My orders' : 'Orders'}</h1>
+  <div class="page-head"><h1>Orders</h1>
     ${canOrder ? `<button class="btn primary sm" data-act="new-order">+ New order</button>` : ''}</div>
   ${filters.length ? `<div class="filters">${filters.map(f => `<button class="chip-filter ${f === status ? 'active' : ''}" data-act="filter-orders" data-status="${f}">${f === 'all' ? 'All' : API.statusLabel(f)}</button>`).join('')}</div>` : ''}
   <div class="card"><div class="tbl-wrap"><table class="tbl">
@@ -823,14 +858,16 @@ const prodEff = (p) => (typeof p.effective_price === 'number' ? p.effective_pric
 function prodPriceHtml(p) {
   const eff = prodEff(p);
   const save = Math.max(0, Math.round((p.price || 0) - eff));
+  // .prod-sub keeps a reserved height whether or not there's a discount, so every
+  // card is exactly the same height and the grid stays even.
   return `
-    <div class="prod-price">
+    <div class="prod-price-row">
       <span class="prod-now">${API.fmtMoney(eff)}</span>
-      ${save > 0 ? `<span class="prod-was">${API.fmtMoney(p.price)}</span>` : ''}
       <span class="prod-per">/ bottle</span>
     </div>
-    ${save > 0 ? `<span class="save-badge">You save ${API.fmtMoney(save)}</span>`
-              : `<span class="save-badge ghost">Fresh from the plant</span>`}`;
+    <div class="prod-sub">${save > 0
+      ? `<s>${API.fmtMoney(p.price)}</s><span class="sv">save ${API.fmtMoney(save)}</span>`
+      : ''}</div>`;
 }
 // Live price update WITHOUT rebuilding the page: patch each card's price block
 // in place (called on a 'pricing' SSE event). No view swap, no scroll change.
@@ -862,9 +899,9 @@ async function viewCustomerHome() {
 
   const card = (p) => `
     <article class="prod${p.id === popId ? ' is-pop' : ''}" data-pid="${p.id}" data-price="${prodEff(p)}">
-      ${p.id === popId ? `<span class="prod-pop">${IC.badge} Most ordered</span>` : ''}
+      ${p.id === popId ? `<span class="prod-pop">Popular</span>` : ''}
       <div class="prod-ic">${p.size_ml >= 6000 ? IC.bottleBig : IC.bottle}</div>
-      <div class="prod-body">
+      <div class="prod-main">
         <div class="prod-nm">${API.esc(p.name)}</div>
         <div class="prod-sz">${sizeLabel(p.size_ml)} bottle</div>
         <div class="prod-pricing">${prodPriceHtml(p)}</div>
@@ -880,31 +917,28 @@ async function viewCustomerHome() {
     </article>`;
 
   return `
+  <div class="shop">
   <section class="shop-hero">
     <div class="shop-hero-row">
       <div class="shop-hero-logo"><img src="/img/pure-pak-logo.jpeg" alt="PurePak"></div>
       <div class="shop-hero-copy">
         <div class="shop-hero-kicker">Welcome back, ${first}</div>
         <h1>Pure water,<br>delivered to your door</h1>
-        <button class="btn shop-hero-cta" data-shop="scroll-cat">Order water</button>
+        <button class="btn shop-hero-cta" data-shop="scroll-cat">Order now</button>
       </div>
     </div>
-    <div class="shop-hero-badges">
-      <span>${IC.truck} Same-day</span>
-      <span>${IC.wallet} Pay on delivery</span>
-      <span>${IC.shield} Lab-tested</span>
+    <div class="shop-trust">
+      <div>${IC.truck}<span>Same-day delivery</span></div>
+      <div>${IC.wallet}<span>Pay on delivery</span></div>
+      <div>${IC.shield}<span>Lab-tested water</span></div>
     </div>
   </section>
 
-  <div class="shop-strip">
-    <div class="ss-item"><b>${k.my_orders || 0}</b><span>orders placed</span></div>
-    <div class="ss-item"><b>${API.fmtMoney(k.lifetime_spend || 0)}</b><span>lifetime with us</span></div>
-    <div class="ss-item ${k.due > 0 ? 'due' : 'ok'}"><b>${API.fmtMoney(k.due || 0)}</b><span>${k.due > 0 ? 'balance due' : 'all settled'}</span></div>
-    <div class="shop-strip-acts">
-      <button class="btn sm" data-act="new-order">+ Order form</button>
-      <button class="btn sm ghost" data-act="nav" data-to="orders">Track my orders →</button>
-    </div>
-  </div>
+  ${k.due > 0 ? `
+  <button class="due-nudge" data-act="nav" data-to="orders">
+    <span>Balance due <b>${API.fmtMoney(k.due)}</b></span>
+    <span class="dn-go">View &amp; pay &rarr;</span>
+  </button>` : ''}
 
   ${last ? `
   <section class="reorder">
@@ -912,29 +946,28 @@ async function viewCustomerHome() {
       <div class="reorder-lbl">Order again</div>
       <div class="reorder-items">${API.esc(last.items || 'your last order')}</div>
     </div>
-    <button class="btn primary" data-shop="reorder" data-order="${last.id}">Repeat order #${last.id}</button>
+    <button class="btn primary sm" data-shop="reorder" data-order="${last.id}">Reorder</button>
   </section>` : ''}
 
   <section class="shop-cat" id="shopCat">
     <div class="shop-cat-head">
       <h2>Choose your water</h2>
-      <span class="muted">Prices shown are for your account</span>
+      <button class="btn ghost sm" data-act="new-order">Order form</button>
     </div>
     <div class="prod-grid">
-      ${products.map(card).join('') || `<div class="card card-pad empty" style="grid-column:1/-1"><div class="em-ico">${IC.bottleBig}</div>No products available right now</div>`}
+      ${products.map(card).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.bottleBig}</div>No products available right now</div>`}
     </div>
   </section>
 
-  <div class="shop-foot">
-    <button class="btn ghost" data-shop="contact">${IC.chat} Need help? Contact us</button>
-    <span class="shop-foot-brand">PurePak &middot; purepak.com.pk</span>
+  <button class="shop-help" data-shop="contact">${IC.chat}<span>Questions about your order or delivery? <b>Contact us</b></span></button>
+  <div class="shop-foot-brand">PurePak &middot; purepak.com.pk</div>
   </div>
 
   <a class="wa-fab" href="${WA_LINK}" aria-label="Chat with PurePak on WhatsApp">${WA_ICON}</a>
 
   <div class="cartbar" id="shopCartBar" hidden>
-    <div class="cartbar-sum"><b id="shopCartQty">0</b> bottles · <b id="shopCartTotal">${API.fmtMoney(0)}</b></div>
-    <button class="btn primary" data-shop="checkout">Review &amp; place order</button>
+    <div class="cartbar-sum"><b id="shopCartQty">0</b> bottles &middot; <b id="shopCartTotal">${API.fmtMoney(0)}</b></div>
+    <button class="btn primary" data-shop="checkout">Review order</button>
   </div>`;
 }
 

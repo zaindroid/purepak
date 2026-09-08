@@ -76,7 +76,7 @@ const nodeFetch = globalThis.fetch;
   const emails = { admin: 'admin@purepak.pk', finance: 'finance@purepak.pk', agent: 'bilal@purepak.pk', delivery: 'delivery@purepak.pk', customer: 'ali@rascon.pk' };
   const markers = {
     dashboard: ['Dashboard', 'Finance', 'Hello'],
-    orders: ['<table'],
+    orders: ['<table', 'ord-card'],
     deliveries: ['<table'],
     customers: ['team-row'],
     agents: ['team-row'],

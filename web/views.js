@@ -106,7 +106,8 @@ function openModal(title, bodyHtml, footHtml = '') {
       </div>
     </div>`;
   document.getElementById('modalBack').addEventListener('click', (e) => { if (e.target.id === 'modalBack') closeModal(); });
-  document.querySelector('#modalRoot [data-close-modal]').addEventListener('click', closeModal);
+  // bind EVERY [data-close-modal] element — the header X and any footer Cancel/Close buttons
+  document.querySelectorAll('#modalRoot [data-close-modal]').forEach(el => el.addEventListener('click', closeModal));
 }
 function closeModal() { document.getElementById('modalRoot').innerHTML = ''; }
 
@@ -161,9 +162,10 @@ async function loadOrderForm(prefill = {}) {
   const items = prefill.items || [{ product_id: products[0].id, qty: 1 }];
   return products.map((p, i) => {
     const it = items[i] || { product_id: p.id, qty: 1 };
+    const unit = (typeof p.effective_price === 'number') ? p.effective_price : p.price;
     return `<div class="field"><span>${API.esc(p.name)}</span>
       <div class="row2"><input type="number" min="0" step="1" data-itemqty="${p.id}" value="${it.qty || 0}">
-      <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(p.price)} / each</div></div></div>
+      <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / each</div></div></div>
     </div>`;
   }).join('');
 }
@@ -197,7 +199,8 @@ async function modalCreateOrder(opts = {}) {
     let t = 0;
     document.querySelectorAll('[data-itemqty]').forEach(inp => {
       const p = products.find(x => x.id === +inp.dataset.itemqty);
-      t += p ? p.price * (parseInt(inp.value) || 0) : 0;
+      const unit = p ? ((typeof p.effective_price === 'number') ? p.effective_price : p.price) : 0;
+      t += unit * (parseInt(inp.value) || 0);
     });
     totalEl.textContent = API.fmtMoney(t);
   }
@@ -818,7 +821,7 @@ async function viewCustomerHome() {
       <div style="color:var(--blue-600);display:flex;justify-content:center;align-items:center;height:28px">${p.size_ml >= 1000 ? IC.bottleBig : IC.bottle}</div>
       <div style="font-weight:700;margin-top:4px">${API.esc(p.name)}</div>
       <div style="color:var(--ink-3);font-size:12.5px;margin-top:2px">${p.size_ml} ml</div>
-      <div class="money-lg" style="font-size:16px;margin-top:6px">${API.fmtMoney(p.price)}</div>
+      <div class="money-lg" style="font-size:16px;margin-top:6px">${API.fmtMoney(typeof p.effective_price === 'number' ? p.effective_price : p.price)}</div>
       <button class="btn primary sm block" style="margin-top:10px" data-act="quick-order" data-product="${p.id}" data-name="${API.esc(p.name)}">Quick order</button>
     </div>`).join('')}
   </div>

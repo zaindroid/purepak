@@ -58,6 +58,7 @@ function notify(userIds, kind, title, body, ref) {
   for (const uid of ids) {
     db.prepare('INSERT INTO notifications(user_id,kind,title,body,ref) VALUES (?,?,?,?,?)')
       .run(uid, kind, title, body || null, ref || null);
+    sseSend(uid, kind); // push to any live SSE stream for that user, instantly
   }
   return ids.length;
 }
@@ -352,11 +353,54 @@ function monthlySeries(months = 6) {
   return out;
 }
 
+// ---------- SSE: live event stream per user ----------
+// Single Node process => a Map of open event streams is enough for realtime.
+const SSE = new Map(); // user.id -> Set<res>
+function sseSend(userId, event) {
+  const set = SSE.get(userId);
+  if (!set || !set.size) return;
+  const payload = `event: ${event}\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
+  for (const res of set) { try { res.write(payload); } catch {} }
+}
+function sseOpen(userId, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.write('retry: 3000\n\n');
+  res.write(`event: hello\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
+  let set = SSE.get(userId);
+  if (!set) { set = new Set(); SSE.set(userId, set); }
+  set.add(res);
+  const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch {} }, 25000);
+  res.on('close', () => {
+    clearInterval(hb);
+    const s = SSE.get(userId);
+    if (s) { s.delete(res); if (!s.size) SSE.delete(userId); }
+  });
+}
+
 // ---------- route handler ----------
 async function handleApi(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean); // ['api', resource...]
   const method = req.method;
   const user = authUser(req);
+
+  // Live event stream (realtime fan-out for the notification bell + views).
+  // EventSource cannot set custom headers, so the token may arrive as ?token=
+  // (browser) or the Authorization header (curl/tests).
+  if (method === 'GET' && parts[1] === 'events') {
+    let evUser = user;
+    if (!evUser) {
+      const qtok = url.searchParams.get('token');
+      // reuse the same 'Bearer ' prefix authUser() compares against
+      if (qtok) evUser = authUser({ headers: { authorization: 'Bearer '.replace(' ', ' ') + qtok } });
+    }
+    if (!evUser) return err(res, 401, 'Not authenticated');
+    return sseOpen(evUser.id, res);
+  }
 
   // Public: login + signup + me (me needs token but is fine)
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'login') {
@@ -521,9 +565,24 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && parts[1] === 'products') {
     requireRole(user, ['admin', 'manager', 'agent', 'finance', 'delivery', 'customer']);
     const all = user && ['admin', 'manager'].includes(user.role);
-    return json(res, 200, all
+    const rows = all
       ? db.prepare('SELECT * FROM products').all()
-      : db.prepare('SELECT * FROM products WHERE active=1').all());
+      : db.prepare('SELECT * FROM products WHERE active=1').all();
+    const out = rows.map(p => {
+      const o = { ...p };
+      // per-type overrides (already nested by the pricing matrix)
+      o.prices = {};
+      for (const t of (db.prepare('SELECT name FROM customer_types').all().map(r => r.name))) {
+        const r = db.prepare('SELECT price FROM product_prices WHERE product_id=? AND customer_type=?').get(p.id, t);
+        o.prices[t] = (r && r.price != null) ? r.price : null;
+      }
+      // effective price the caller actually pays (their type; base for staff)
+      o.effective_price = priceForCustomer(p.id, user && user.customer_id
+        ? db.prepare('SELECT type FROM customers WHERE id=?').get(user.customer_id)?.type || null
+        : null);
+      return o;
+    });
+    return json(res, 200, out);
   }
   if (method === 'POST' && parts[1] === 'products') {
     const u = requireRole(user, ['admin', 'manager']);
@@ -675,6 +734,15 @@ async function handleApi(req, res, url) {
     const orderId = r.lastInsertRowid;
     const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
     for (const row of prepared) insOI.run(orderId, ...row);
+    // Let the office know a new order just came in (staff + any assigned agent)
+    {
+      const targets = new Set(staffUserIds().filter(x => x !== user.id));
+      if (agentId) {
+        const ag = db.prepare('SELECT user_id FROM agents WHERE id=?').get(agentId);
+        if (ag && ag.user_id) targets.add(ag.user_id);
+      }
+      notify([...targets], 'order', 'New order received', `New water order · ${items.length} item(s) · Rs ${total} total`);
+    }
     return json(res, 201, db.prepare(Q.orders + ' WHERE o.id=?').get(orderId));
   }
   if (method === 'PATCH' && parts[1] === 'orders' && parts.length === 3 && !isNaN(+parts[2])) {
@@ -698,6 +766,17 @@ async function handleApi(req, res, url) {
       }
       if (b.status === 'delivered') {
         db.prepare(`UPDATE deliveries SET status='delivered', delivered_at=datetime('now') WHERE order_id=? AND status IN ('pending','out_for_delivery')`).run(oid);
+      }
+      // Notify the customer (and staff, when the acting user isn't already staff)
+      {
+        const cust = db.prepare('SELECT c.*, u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
+        if (cust && cust.uid) {
+          const titles = { confirmed: 'Order confirmed', in_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Order cancelled' };
+          const bodies = { confirmed: `Order #${oid} has been confirmed.`, in_delivery: `Order #${oid} is out for delivery.`, delivered: `Order #${oid} has been delivered.`, cancelled: `Order #${oid} was cancelled.` };
+          const t = titles[b.status];
+          if (t) notify([cust.uid], 'order', t, bodies[b.status], `order#${oid}`);
+        }
+        if (!['admin', 'manager', 'finance'].includes(user.role)) notify(staffUserIds().filter(x => x !== user.id), 'order', `Order #${oid} -> ${b.status}`, null, `order#${oid}`);
       }
     }
     if (b.paid !== undefined) {
@@ -764,6 +843,15 @@ async function handleApi(req, res, url) {
     // keep order status in sync
     if (next === 'delivered') db.prepare(`UPDATE orders SET status='delivered' WHERE id=? AND status='in_delivery'`).run(cur.order_id);
     if (next === 'failed') db.prepare(`UPDATE orders SET status='confirmed' WHERE id=? AND status='in_delivery'`).run(cur.order_id);
+    // notify the customer of the delivery outcome
+    if (next === 'delivered' || next === 'failed') {
+      const cust = db.prepare(`SELECT c.id, u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=(SELECT customer_id FROM orders WHERE id=?)`).get(cur.order_id);
+      if (cust && cust.uid) {
+        notify([cust.uid], 'order', next === 'delivered' ? 'Delivered' : 'Delivery could not be completed',
+          next === 'delivered' ? `Your water order has been delivered.` : `Your water delivery was not completed. Our team will follow up.`,
+          `order#${cur.order_id}`);
+      }
+    }
     return json(res, 200, db.prepare('SELECT * FROM deliveries WHERE id=?').get(did));
   }
 

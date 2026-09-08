@@ -54,13 +54,22 @@ const App = {
     const bell = document.getElementById('topBell');
     if (bell) bell.addEventListener('click', (e) => { e.stopPropagation(); this.bellToggle(); });
     const menu = document.getElementById('menuBtn');
-    menu.addEventListener('click', () => document.getElementById('sidebar').classList.toggle('open'));
-    document.getElementById('scrim').addEventListener('click', () => document.getElementById('sidebar').classList.remove('open'));
+    const sidebar = document.getElementById('sidebar');
+    const scrim = document.getElementById('scrim');
+    // keep the drawer + its scrim in lockstep (scrim must be visible whenever
+    // the drawer is, or a tap on the page can't close it)
+    const setMenu = (open) => {
+      sidebar.classList.toggle('open', open);
+      scrim.classList.toggle('hidden', !open);
+    };
+    menu.addEventListener('click', () => setMenu(!sidebar.classList.contains('open')));
+    scrim.addEventListener('click', () => setMenu(false));
 
     // global action delegation
     document.getElementById('view').addEventListener('click', (e) => {
       const el = e.target.closest('[data-act]');
       if (el) this.act(el.dataset, e);
+      setMenu(false); // any tap on the content area also closes the drawer
     });
     document.getElementById('view').addEventListener('change', (e) => {
       if (e.target.id === 'payPeriod' && typeof setPayPeriod === 'function') {
@@ -208,13 +217,50 @@ const App = {
     document.getElementById('bellBadge')?.classList.add('hidden');
   },
 
-  // ---- notification bell ----
+  // ---- notification bell + realtime ----
   bellStart() {
     this.bellStop();
-    this.bellTimer = setInterval(() => this.bellUpdate(true).catch(() => {}), 30000);
+    this._startSSE();
+    // SSE gives instant updates; this long-interval poll is a safety net in case
+    // the stream is blocked (some proxies drop EventSource) so data still lands.
+    this.bellTimer = setInterval(() => this.bellUpdate(true).catch(() => {}), 45000);
     this.bellUpdate().catch(() => {});
   },
-  bellStop() { if (this.bellTimer) { clearInterval(this.bellTimer); this.bellTimer = null; } },
+  bellStop() {
+    if (this.bellTimer) { clearInterval(this.bellTimer); this.bellTimer = null; }
+    this._stopSSE();
+  },
+  // Open one SSE stream; on any event, refresh the bell badge and the view that's
+  // on screen so multi-account team operations appear in (near) realtime.
+  _startSSE() {
+    this._stopSSE();
+    let es;
+    // EventSource cannot set the Authorization header, so the token goes in the
+    // query string for this endpoint only (the server reads ?token= there).
+    const u = new URL('/api/events', location.origin);
+    if (API.token) u.searchParams.set('token', API.token);
+    try { es = new EventSource(u.toString()); } catch { return; }
+    this._es = es;
+    const bump = () => {
+      this.bellUpdate(true).catch(() => {});
+      // refresh the current view (debounced so a burst of events = one refresh)
+      if (this._viewRefreshTimer) return;
+      this._viewRefreshTimer = setTimeout(() => {
+        this._viewRefreshTimer = null;
+        if (API.user) this.refresh();
+      }, 400);
+    };
+    ['order', 'pricing', 'team', 'receipt', 'payroll'].forEach(ev => {
+      es.addEventListener(ev, bump);
+      // EventSource 'message' fallback for untyped events
+    });
+    es.addEventListener('message', bump);
+    es.addEventListener('error', () => { /* EventSource auto-reconnects; no-op */ });
+  },
+  _stopSSE() {
+    if (this._es) { try { this._es.close(); } catch {} this._es = null; }
+    if (this._viewRefreshTimer) { clearTimeout(this._viewRefreshTimer); this._viewRefreshTimer = null; }
+  },
   async bellUpdate(silent) {
     const u = API.user;
     if (!u) return;

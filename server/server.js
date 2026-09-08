@@ -245,7 +245,10 @@ function geminiKey() { return setting('gemini_api_key') || process.env.GEMINI_AP
 async function extractReceipt(apiKey, imagePath) {
   const b64 = fs.readFileSync(imagePath).toString('base64');
   const ext = imagePath.endsWith('.png') ? 'png' : 'jpeg';
-  const model = setting('gemini_model') || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  // gemini-3.6-flash is the current default (2.x models are 404 for new keys).
+  // It's a "thinking" model, so give a generous output budget and cap thinking,
+  // or the answer JSON gets truncated (finishReason MAX_TOKENS -> empty text).
+  const model = setting('gemini_model') || process.env.GEMINI_MODEL || 'gemini-3.6-flash';
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + encodeURIComponent(apiKey);
   const body = {
     contents: [{
@@ -254,16 +257,23 @@ async function extractReceipt(apiKey, imagePath) {
         { inline_data: { mime_type: 'image/' + ext, data: b64 } },
       ],
     }],
-    generationConfig: { temperature: 0, maxOutputTokens: 1400, responseMimeType: 'application/json' },
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 4096,
+      responseMimeType: 'application/json',
+      thinkingConfig: { thinkingBudget: 256 },
+    },
   };
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error('Gemini ' + res.status);
+  if (!res.ok) throw new Error('Gemini ' + res.status + ' (' + (await res.text().catch(() => '')).slice(0, 200) + ')');
   const out = await res.json();
-  const text = out?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  const cand = out?.candidates?.[0];
+  const text = (cand?.content?.parts || []).map(p => p.text).filter(Boolean).join('');
+  if (!text) throw new Error('Gemini empty response (finish=' + (cand?.finishReason || '?') + ')');
   // strip any code fences the model may add
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('No JSON in Gemini response');

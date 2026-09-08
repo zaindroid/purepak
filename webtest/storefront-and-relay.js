@@ -86,7 +86,28 @@ async function openStream(token) {
   check('admin customer create accepted', res.status === 201);
   check('agent got live "customer" push on customer create', await agentStream.waitFor('customer'));
 
-  custStream.close(); agentStream.close();
+  // customer places an order -> admin's board updates live + it lands in the office feed
+  const adminStream = await openStream(adminTok);
+  await sleep(300);
+  adminStream.buf = '';
+  const beforeUnread = (await apiAs(adminTok, 'GET', '/notifications')).body.unread || 0;
+  res = await apiAs(custTok, 'POST', '/orders', { items: [{ product_id: 2, qty: 3 }] });
+  check('customer order placed', res.status === 201, JSON.stringify(res.body));
+  check('admin board got live "order" push', await adminStream.waitFor('order'));
+  await sleep(200);
+  const now = (await apiAs(adminTok, 'GET', '/notifications')).body;
+  check('new order lands in admin notification feed',
+    (now.unread || 0) > beforeUnread && now.notifications.some(n => n.kind === 'order' && /Rascon/.test(n.body || '')),
+    JSON.stringify(now.notifications && now.notifications[0]));
+  // manager + finance get it too
+  for (const who of ['manager@purepak.pk', 'finance@purepak.pk']) {
+    const t = await login(who);
+    const nf = (await apiAs(t, 'GET', '/notifications')).body;
+    check(who.split('@')[0] + ' also notified of the new order',
+      nf.notifications.some(n => n.kind === 'order' && /Rascon/.test(n.body || '')));
+  }
+
+  custStream.close(); agentStream.close(); adminStream.close();
 
   // ---------- 2. customer storefront (jsdom) ----------
   let html = readFileSync(path.join(W, 'index.html'), 'utf8')
@@ -112,26 +133,38 @@ async function openStream(token) {
 
   const view = document.getElementById('view');
   check('storefront hero renders (not a dashboard)', /shop-hero/.test(view.innerHTML) && !/grid kpis/.test(view.innerHTML));
-  const cards = view.querySelectorAll('.prod');
+  check('hero is trimmed — no plant address', !/Golra/i.test(view.querySelector('.shop-hero').innerHTML));
+  check('floating WhatsApp button deep-links to the app', /href="whatsapp:\/\/send/.test((view.querySelector('.wa-fab') || {}).outerHTML || ''));
+  const firstPid = view.querySelector('.prod').dataset.pid;
   const catalog = await (await fetch(BASE + '/api/products', { headers: { Authorization: 'Bearer ' + custTok } })).json();
-  check('a product card per catalog item', cards.length === catalog.length, `cards=${cards.length} catalog=${catalog.length}`);
-  check('every card has an "Add to order" button', [...cards].every(c => c.querySelector('[data-shop="add"]')));
+  check('a product card per catalog item', view.querySelectorAll('.prod').length === catalog.length,
+    `cards=${view.querySelectorAll('.prod').length} catalog=${catalog.length}`);
+  check('every card has an "Add to order" button', [...view.querySelectorAll('.prod')].every(c => c.querySelector('[data-shop="add"]')));
 
   // add two of the first product via the card button + the stepper
-  const firstPid = cards[0].dataset.pid;
-  cards[0].querySelector('[data-shop="add"]').click();
+  const c0 = () => view.querySelector(`.prod[data-pid="${firstPid}"]`);
+  c0().querySelector('[data-shop="add"]').click();
   await sleep(50);
-  cards[0].querySelector('[data-shop="inc"]').click();
+  c0().querySelector('[data-shop="inc"]').click();
   await sleep(50);
-  check('card flips to in-cart state', cards[0].classList.contains('in-cart'));
-  check('stepper shows qty 2', cards[0].querySelector('[data-qty]').textContent === '2');
+  check('card flips to in-cart state', c0().classList.contains('in-cart'));
+  check('stepper shows qty 2', c0().querySelector('[data-qty]').textContent === '2');
   const bar = document.getElementById('shopCartBar');
   check('sticky cart bar becomes visible', bar && !bar.hidden);
   check('cart bar totals the basket', document.getElementById('shopCartQty').textContent === '2');
   check('body gets has-cartbar (page padding)', document.body.classList.contains('has-cartbar'));
 
+  // live price change while items are in the basket -> reprices in place, keeps basket + scroll
+  const before = c0().querySelector('.prod-now').textContent;
+  await apiAs(adminTok, 'POST', '/pricing', [{ product_id: +firstPid, customer_type: 'wholesale', price: 999 }]);
+  await window.App.quietRefresh();
+  await sleep(100);
+  check('storefront reprices in place on a live update', /999/.test(c0().querySelector('.prod-now').textContent),
+    `${before} -> ${c0().querySelector('.prod-now').textContent}`);
+  check('basket survives the live re-render', c0().classList.contains('in-cart') && !document.getElementById('shopCartBar').hidden);
+
   // checkout -> order modal prefilled with the basket
-  document.querySelector('[data-shop="checkout"]').click();
+  view.querySelector('[data-shop="checkout"]').click();
   await sleep(500);
   check('checkout opens the order modal', !!document.getElementById('ocSubmit'));
   const qtyInput = document.querySelector(`[data-itemqty="${firstPid}"]`);
@@ -142,6 +175,12 @@ async function openStream(token) {
   const toast = document.querySelector('.toast');
   check('order places from storefront', !!toast && /placed/i.test(toast.textContent), toast ? toast.textContent : 'no toast');
   check('basket clears after order placed', document.getElementById('shopCartBar') == null || document.getElementById('shopCartBar').hidden);
+
+  // "Contact us" opens a modal with all the contact details (kept out of the page body)
+  view.querySelector('[data-shop="contact"]').click();
+  await sleep(200);
+  const cm = document.getElementById('modalRoot');
+  check('Contact us opens a details modal', /whatsapp:\/\/send/.test(cm.innerHTML) && /purepak\.com\.pk/.test(cm.innerHTML) && /6666 796/.test(cm.innerHTML));
 
   console.log('----');
   console.log(fails === 0 ? 'STOREFRONT + RELAY: ALL PASS' : fails + ' FAILURES');

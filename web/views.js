@@ -810,9 +810,10 @@ async function viewBookkeeping() {
 
 // ================= CUSTOMER (storefront) =================
 const WA_NUMBER = '923156666796';
-// whatsapp:// opens the installed app directly (wa.me/https falls through to
-// WhatsApp Web on desktop and inside some Android WebViews).
+// whatsapp:// opens the installed phone app directly (wa.me / https falls
+// through to WhatsApp Web on desktop and inside some Android WebViews).
 const WA_LINK = `whatsapp://send?phone=${WA_NUMBER}&text=${encodeURIComponent('Hi PurePak, I need help with my water order.')}`;
+const WA_ICON = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M17.5 14.4c-.29-.15-1.7-.84-1.96-.93-.26-.1-.45-.15-.64.14-.19.29-.74.93-.9 1.12-.17.19-.33.22-.62.07-.29-.15-1.22-.45-2.33-1.44-.86-.77-1.44-1.72-1.61-2.01-.17-.29-.02-.45.13-.59.13-.13.29-.34.43-.5.15-.17.19-.29.29-.48.1-.19.05-.36-.02-.5-.08-.15-.64-1.55-.88-2.12-.23-.56-.47-.48-.64-.49h-.55c-.19 0-.5.07-.76.36-.26.29-1 .98-1 2.38 0 1.4 1.02 2.76 1.17 2.95.14.19 2.01 3.08 4.88 4.32.68.29 1.21.47 1.63.6.68.22 1.31.19 1.8.11.55-.08 1.7-.69 1.94-1.36.24-.67.24-1.24.17-1.36-.07-.12-.26-.19-.55-.34zM12 2.05a9.94 9.94 0 0 0-8.5 15.14L2 22.05l4.98-1.46A9.94 9.94 0 1 0 12 2.05z"/></svg>';
 
 const sizeLabel = (ml) => ml >= 1000
   ? (Number.isInteger(ml / 1000) ? ml / 1000 : (ml / 1000).toFixed(1)) + ' L'
@@ -859,15 +860,14 @@ async function viewCustomerHome() {
       <div class="shop-hero-logo"><img src="/img/pure-pak-logo.jpeg" alt="PurePak"></div>
       <div class="shop-hero-copy">
         <div class="shop-hero-kicker">Welcome back, ${first}</div>
-        <h1>Pure mineral water,<br>delivered to your door</h1>
-        <p>Sealed at our plant on Main Golra Road, Islamabad. Pick your bottles below — we handle the rest.</p>
-        <button class="btn primary shop-hero-cta" data-shop="scroll-cat">Order water now</button>
+        <h1>Pure water,<br>delivered to your door</h1>
+        <button class="btn shop-hero-cta" data-shop="scroll-cat">Order water</button>
       </div>
     </div>
     <div class="shop-hero-badges">
-      <span>${IC.truck} Same-day delivery</span>
+      <span>${IC.truck} Same-day</span>
       <span>${IC.wallet} Pay on delivery</span>
-      <span>${IC.shield} Lab-tested purity</span>
+      <span>${IC.shield} Lab-tested</span>
     </div>
   </section>
 
@@ -900,17 +900,12 @@ async function viewCustomerHome() {
     </div>
   </section>
 
-  <section class="card shop-support">
-    <div class="ssup-head"><div class="ssup-ic">${IC.chat}</div>
-      <div><div class="ssup-t">Need a hand?</div><div class="ssup-s">Delivery times, standing orders, bulk pricing — talk to us.</div></div>
-    </div>
-    <div class="ssup-links">
-      <a class="btn block ssup-wa" href="${WA_LINK}">${IC.chat} Chat on WhatsApp</a>
-      <a class="btn block" href="tel:+${WA_NUMBER}">${IC.phone} Call +92 315 6666 796</a>
-      <a class="btn block" href="mailto:contact@purepak.com.pk">${IC.mail} Email contact@purepak.com.pk</a>
-    </div>
-    <p class="ssup-addr">PurePak · Main Golra Rd, near Golra Railway Station, Islamabad</p>
-  </section>
+  <div class="shop-foot">
+    <button class="btn ghost" data-shop="contact">${IC.chat} Need help? Contact us</button>
+    <span class="shop-foot-brand">PurePak &middot; purepak.com.pk</span>
+  </div>
+
+  <a class="wa-fab" href="${WA_LINK}" aria-label="Chat with PurePak on WhatsApp">${WA_ICON}</a>
 
   <div class="cartbar" id="shopCartBar" hidden>
     <div class="cartbar-sum"><b id="shopCartQty">0</b> bottles · <b id="shopCartTotal">${API.fmtMoney(0)}</b></div>
@@ -965,6 +960,8 @@ async function onShopClick(e) {
   } else if (act === 'scroll-cat') {
     document.getElementById('shopCat')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
+  } else if (act === 'contact') {
+    return modalContact();
   } else if (act === 'checkout') {
     return shopCheckout();
   } else if (act === 'reorder') {
@@ -984,6 +981,19 @@ function initCustomerHome() {
   if (_shopWired) return;
   _shopWired = true;
   document.getElementById('view').addEventListener('click', onShopClick);
+}
+
+// full contact details, opened from the storefront "Contact us" button
+function modalContact() {
+  openModal('Contact PurePak', `
+    <p class="muted" style="margin:0 0 12px;font-size:13px;line-height:1.5">Orders, deliveries, standing orders or bulk pricing — we're happy to help.</p>
+    <div class="contact-list">
+      <a class="btn block contact-wa" href="${WA_LINK}">${WA_ICON} Chat on WhatsApp</a>
+      <a class="btn block" href="tel:+${WA_NUMBER}">${IC.phone} +92 315 6666 796</a>
+      <a class="btn block" href="mailto:contact@purepak.com.pk">${IC.mail} contact@purepak.com.pk</a>
+    </div>
+    <p class="muted" style="margin:14px 0 0;font-size:12px;line-height:1.5">PurePak &middot; Main Golra Rd, near Golra Railway Station, Islamabad</p>
+  `, `<button class="btn primary block" data-close-modal>Close</button>`);
 }
 
 // ================= RECEIPTS (scan -> staging -> verify -> ledger) =================

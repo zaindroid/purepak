@@ -378,7 +378,9 @@ function sseOpen(userId, res) {
     'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
     'Access-Control-Allow-Origin': '*',
+    'X-Accel-Buffering': 'no', // stop nginx/Traefik/CDN from buffering the stream
   });
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
   res.write('retry: 3000\n\n');
   res.write(`event: hello\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
   let set = SSE.get(userId);
@@ -756,7 +758,8 @@ async function handleApi(req, res, url) {
     const orderId = r.lastInsertRowid;
     const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
     for (const row of prepared) insOI.run(orderId, ...row);
-    // Let the office know a new order just came in (staff + any assigned agent)
+    // Every new order notifies the office — admin + manager + finance always,
+    // plus the assigned agent — so it lands in their notification feed live.
     {
       const targets = new Set(staffUserIds().filter(x => x !== user.id));
       if (agentId) {
@@ -764,8 +767,11 @@ async function handleApi(req, res, url) {
         const ag = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(agentId);
         if (ag && ag.id !== user.id) targets.add(ag.id);
       }
-      notify([...targets], 'order', 'New order received', `New water order · ${items.length} item(s) · Rs ${total} total`);
+      const units = prepared.reduce((s, row) => s + row[1], 0);
+      notify([...targets], 'order', 'New order received',
+        `${cust.name} · ${units} bottle(s) · Rs ${total}`, 'order#' + orderId);
     }
+    sseBroadcast('order'); // every open order board / dashboard refreshes live
     return json(res, 201, db.prepare(Q.orders + ' WHERE o.id=?').get(orderId));
   }
   if (method === 'PATCH' && parts[1] === 'orders' && parts.length === 3 && !isNaN(+parts[2])) {
@@ -814,6 +820,7 @@ async function handleApi(req, res, url) {
       else if (inc < 0) db.prepare('INSERT INTO ledger(account,type,amount,ref,memo,at) VALUES (?,?,?,?,?,?)')
         .run('Cash / Bank', 'expense', -inc, 'order#' + oid, 'Payment refund', new Date().toISOString().slice(0, 19).replace('T', ' '));
     }
+    sseBroadcast('order'); // status / payment change reaches the customer + every staff board live
     return json(res, 200, db.prepare(Q.orders + ' WHERE o.id=?').get(oid));
   }
 
@@ -874,7 +881,11 @@ async function handleApi(req, res, url) {
           next === 'delivered' ? `Your water order has been delivered.` : `Your water delivery was not completed. Our team will follow up.`,
           `order#${cur.order_id}`);
       }
+      notify(staffUserIds().filter(x => x !== user.id), 'order',
+        next === 'delivered' ? `Order #${cur.order_id} delivered` : `Order #${cur.order_id} delivery failed`,
+        null, `order#${cur.order_id}`);
     }
+    sseBroadcast('order'); // driver route, dispatch board, customer order list all refresh live
     return json(res, 200, db.prepare('SELECT * FROM deliveries WHERE id=?').get(did));
   }
 

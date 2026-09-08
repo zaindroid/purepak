@@ -362,6 +362,16 @@ function sseSend(userId, event) {
   const payload = `event: ${event}\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
   for (const res of set) { try { res.write(payload); } catch {} }
 }
+// Portal-wide changes (price list, catalog, customer records) affect what every
+// signed-in account sees — fan the event out to every open stream so their view
+// refetches live, not just the staff who happen to get a bell notification.
+function sseBroadcast(event, exceptUserId) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
+  for (const [uid, set] of SSE) {
+    if (uid === exceptUserId) continue;
+    for (const res of set) { try { res.write(payload); } catch {} }
+  }
+}
 function sseOpen(userId, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -590,6 +600,7 @@ async function handleApi(req, res, url) {
     if (!b.name || !(Number(b.size_ml) > 0) || !(Number(b.price) >= 0)) return err(res, 400, 'name, size_ml, price required');
     const r = db.prepare('INSERT INTO products(name,size_ml,price,description) VALUES (?,?,?,?)')
       .run(b.name, b.size_ml, b.price, b.description || null);
+    sseBroadcast('pricing'); // new product shows up on every open catalog/shop
     return json(res, 201, db.prepare('SELECT * FROM products WHERE id=?').get(r.lastInsertRowid));
   }
   if (method === 'PATCH' && parts[1] === 'products' && parts.length === 3 && !isNaN(+parts[2])) {
@@ -607,6 +618,7 @@ async function handleApi(req, res, url) {
     if (b.price !== undefined && Number(b.price) >= 0 && Number(b.price) !== cur.price)
       notify(staffUserIds(), 'pricing', 'Base price changed',
         cur.name + ' base price ' + cur.price + ' → ' + Number(b.price) + ' (by ' + user.name + ').', 'product#' + cur.id);
+    sseBroadcast('pricing'); // price / availability change reaches every open shop live
     return json(res, 200, db.prepare('SELECT * FROM products WHERE id=?').get(+parts[2]));
   }
 
@@ -628,6 +640,7 @@ async function handleApi(req, res, url) {
     const type = types.includes(b.type) ? b.type : 'retail';
     const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type) VALUES (?,?,?,?,?,?,?)')
       .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type);
+    sseBroadcast('customer');
     return json(res, 201, db.prepare('SELECT * FROM customers WHERE id=?').get(r.lastInsertRowid));
   }
   if (method === 'PATCH' && parts[1] === 'customers' && parts.length === 3 && !isNaN(+parts[2])) {
@@ -645,6 +658,10 @@ async function handleApi(req, res, url) {
         b.area !== undefined ? (b.area || null) : cur.area,
         b.type && types.includes(b.type) ? b.type : cur.type,
         +parts[2]);
+    sseBroadcast('customer');
+    // a customer-type change reprices that customer's whole catalog — make their
+    // own shop (and any staff order screen) reflect it immediately
+    if (b.type && types.includes(b.type) && b.type !== cur.type) sseBroadcast('pricing');
     return json(res, 200, db.prepare('SELECT * FROM customers WHERE id=?').get(+parts[2]));
   }
 
@@ -683,8 +700,13 @@ async function handleApi(req, res, url) {
       }
       n++;
     }
-    if (n) notify(staffUserIds(), 'pricing', 'Price list updated',
-      n + ' price override(s) updated by ' + user.name + '. Applies to new orders.');
+    if (n) {
+      notify(staffUserIds(), 'pricing', 'Price list updated',
+        n + ' price override(s) updated by ' + user.name + '. Applies to new orders.');
+      // every signed-in account (customers see their own type's prices, agents/
+      // staff see the matrix) gets the refreshed price list in realtime
+      sseBroadcast('pricing');
+    }
     return json(res, 200, { updated: n });
   }
 

@@ -221,7 +221,9 @@ async function modalCreateOrder(opts = {}) {
     }
     try {
       const o = await API.createOrder(body);
-      closeModal(); toast('Order #' + o.id + ' placed', 'ok'); App.refresh();
+      closeModal(); toast('Order #' + o.id + ' placed', 'ok');
+      if (typeof opts.onPlaced === 'function') { try { opts.onPlaced(o); } catch {} }
+      App.refresh();
     } catch (e) { toast(e.message, 'bad'); }
   });
 }
@@ -806,45 +808,182 @@ async function viewBookkeeping() {
     </tbody></table></div></div>`;
 }
 
-// ================= CUSTOMER =================
+// ================= CUSTOMER (storefront) =================
+const WA_NUMBER = '923156666796';
+// whatsapp:// opens the installed app directly (wa.me/https falls through to
+// WhatsApp Web on desktop and inside some Android WebViews).
+const WA_LINK = `whatsapp://send?phone=${WA_NUMBER}&text=${encodeURIComponent('Hi PurePak, I need help with my water order.')}`;
+
+const sizeLabel = (ml) => ml >= 1000
+  ? (Number.isInteger(ml / 1000) ? ml / 1000 : (ml / 1000).toFixed(1)) + ' L'
+  : ml + ' ml';
+
+// in-memory basket for the shop; survives SSE-driven re-renders of the page
+const shopCart = new Map(); // productId -> qty
+let _shopWired = false;
+
 async function viewCustomerHome() {
   const [k, orders, products] = await Promise.all([API.kpis(), API.orders(), API.products()]);
+  const first = API.esc((API.user.name || '').split(' ')[0] || 'there');
+  // "most popular" = the office dispenser bottle (19 L), else the biggest size
+  const popId = (products.find(p => p.size_ml === 19000) || products.slice().sort((a, b) => b.size_ml - a.size_ml)[0] || {}).id;
+  const last = orders[0];
+
+  const card = (p) => {
+    const eff = typeof p.effective_price === 'number' ? p.effective_price : p.price;
+    const save = Math.max(0, Math.round((p.price || 0) - eff));
+    return `
+    <article class="prod${p.id === popId ? ' is-pop' : ''}" data-pid="${p.id}" data-price="${eff}">
+      ${p.id === popId ? `<span class="prod-pop">${IC.badge} Most ordered</span>` : ''}
+      <div class="prod-ic">${p.size_ml >= 6000 ? IC.bottleBig : IC.bottle}</div>
+      <div class="prod-nm">${API.esc(p.name)}</div>
+      <div class="prod-sz">${sizeLabel(p.size_ml)} bottle</div>
+      <div class="prod-price">
+        <span class="prod-now">${API.fmtMoney(eff)}</span>
+        ${save > 0 ? `<span class="prod-was">${API.fmtMoney(p.price)}</span>` : ''}
+        <span class="prod-per">/ bottle</span>
+      </div>
+      ${save > 0 ? `<span class="save-badge">You save ${API.fmtMoney(save)}</span>` : '<span class="save-badge ghost">Fresh from the plant</span>'}
+      <button class="btn primary block prod-add" data-shop="add" data-pid="${p.id}">Add to order</button>
+      <div class="qty-step" data-pid="${p.id}">
+        <button data-shop="dec" data-pid="${p.id}" aria-label="Remove one">−</button>
+        <span data-qty="${p.id}">0</span>
+        <button data-shop="inc" data-pid="${p.id}" aria-label="Add one">+</button>
+      </div>
+    </article>`;
+  };
+
   return `
-  <div class="page-head"><h1>Hello, ${API.esc(API.user.name.split(' ')[0])}</h1><button class="btn primary sm" data-act="new-order">+ Order water</button></div>
-  <div class="grid kpis">
-    ${V.kpiCard('My orders', k.my_orders, 'all time')}
-    ${V.kpiCard('Lifetime spend', API.fmtMoney(k.lifetime_spend))}
-    ${k.due > 0 ? V.kpiCard('Balance due', API.fmtMoney(k.due), 'on open orders', 'warn') : V.kpiCard('Balance due', API.fmtMoney(0), 'all settled', 'good')}
-  </div>
-  <div class="grid grid-products" style="margin-top:14px">
-    ${products.map(p => `<div class="card card-pad" style="text-align:center;padding:16px">
-      <div style="color:var(--blue-600);display:flex;justify-content:center;align-items:center;height:28px">${p.size_ml >= 1000 ? IC.bottleBig : IC.bottle}</div>
-      <div style="font-weight:700;margin-top:4px">${API.esc(p.name)}</div>
-      <div style="color:var(--ink-3);font-size:12.5px;margin-top:2px">${p.size_ml} ml</div>
-      <div class="money-lg" style="font-size:16px;margin-top:6px">${API.fmtMoney(typeof p.effective_price === 'number' ? p.effective_price : p.price)}</div>
-      <button class="btn primary sm block" style="margin-top:10px" data-act="quick-order" data-product="${p.id}" data-name="${API.esc(p.name)}">Quick order</button>
-    </div>`).join('')}
-  </div>
-  <div class="card" style="margin-top:14px">
-    <div class="card-head"><h2>Order history</h2><div class="spacer"></div><button class="btn sm ghost" data-act="nav" data-to="orders">View all</button></div>
-    ${orders.slice(0, 5).map(o => `
-      <div class="list-row" style="cursor:pointer" data-act="view-order" data-id="${o.id}">
-        <div class="grow"><div class="t">#${o.id} · ${API.fmtDay(o.placed_at)}</div><div class="s">${API.esc(o.items || '')}</div></div>
-        <div style="text-align:right"><div style="font-weight:700">${API.fmtMoney(o.total)}</div>${V.chip(o.status)}</div>
-      </div>`).join('') || `<div class="empty"><div class="em-ico">${IC.box}</div>No orders yet</div>`}
-  </div>
-  <div class="card" style="margin-top:14px;padding:16px">
-    <div class="card-head"><h2>Help &amp; support</h2><div class="spacer"></div></div>
-    <p class="muted" style="font-size:13px;margin:2px 0 12px">Questions about your order or delivery? We're here for you.</p>
-    <div style="display:flex;flex-direction:column;gap:8px">
-      <a class="btn sm block" style="justify-content:flex-start;color:var(--green-ink);border-color:#bfe8d2"
-         href="https://wa.me/923156666796" target="_blank" rel="noopener"
-         oncontextmenu="return false" onauxclick="if(event.button===1){window.open(this.href,'_blank');event.preventDefault();}">${IC.chat} Chat on WhatsApp</a>
-      <a class="btn sm block" style="justify-content:flex-start" href="tel:+923156666796">${IC.phone} Call +92 315 6666 796</a>
-      <a class="btn sm block" style="justify-content:flex-start" href="mailto:contact@purepak.com.pk">${IC.mail} Email contact@purepak.com.pk</a>
+  <section class="shop-hero">
+    <div class="shop-hero-row">
+      <div class="shop-hero-logo"><img src="/img/pure-pak-logo.jpeg" alt="PurePak"></div>
+      <div class="shop-hero-copy">
+        <div class="shop-hero-kicker">Welcome back, ${first}</div>
+        <h1>Pure mineral water,<br>delivered to your door</h1>
+        <p>Sealed at our plant on Main Golra Road, Islamabad. Pick your bottles below — we handle the rest.</p>
+        <button class="btn primary shop-hero-cta" data-shop="scroll-cat">Order water now</button>
+      </div>
     </div>
-    <p class="muted" style="font-size:11.5px;margin-top:10px">Head office · Main Golra Rd, near Golra Railway Station, Islamabad</p>
+    <div class="shop-hero-badges">
+      <span>${IC.truck} Same-day delivery</span>
+      <span>${IC.wallet} Pay on delivery</span>
+      <span>${IC.shield} Lab-tested purity</span>
+    </div>
+  </section>
+
+  <div class="shop-strip">
+    <div class="ss-item"><b>${k.my_orders || 0}</b><span>orders placed</span></div>
+    <div class="ss-item"><b>${API.fmtMoney(k.lifetime_spend || 0)}</b><span>lifetime with us</span></div>
+    <div class="ss-item ${k.due > 0 ? 'due' : 'ok'}"><b>${API.fmtMoney(k.due || 0)}</b><span>${k.due > 0 ? 'balance due' : 'all settled'}</span></div>
+    <div class="shop-strip-acts">
+      <button class="btn sm" data-act="new-order">+ Order form</button>
+      <button class="btn sm ghost" data-act="nav" data-to="orders">Track my orders →</button>
+    </div>
+  </div>
+
+  ${last ? `
+  <section class="reorder">
+    <div class="reorder-txt">
+      <div class="reorder-lbl">Order again</div>
+      <div class="reorder-items">${API.esc(last.items || 'your last order')}</div>
+    </div>
+    <button class="btn primary" data-shop="reorder" data-order="${last.id}">Repeat order #${last.id}</button>
+  </section>` : ''}
+
+  <section class="shop-cat" id="shopCat">
+    <div class="shop-cat-head">
+      <h2>Choose your water</h2>
+      <span class="muted">Prices shown are for your account</span>
+    </div>
+    <div class="prod-grid">
+      ${products.map(card).join('') || `<div class="card card-pad empty" style="grid-column:1/-1"><div class="em-ico">${IC.bottleBig}</div>No products available right now</div>`}
+    </div>
+  </section>
+
+  <section class="card shop-support">
+    <div class="ssup-head"><div class="ssup-ic">${IC.chat}</div>
+      <div><div class="ssup-t">Need a hand?</div><div class="ssup-s">Delivery times, standing orders, bulk pricing — talk to us.</div></div>
+    </div>
+    <div class="ssup-links">
+      <a class="btn block ssup-wa" href="${WA_LINK}">${IC.chat} Chat on WhatsApp</a>
+      <a class="btn block" href="tel:+${WA_NUMBER}">${IC.phone} Call +92 315 6666 796</a>
+      <a class="btn block" href="mailto:contact@purepak.com.pk">${IC.mail} Email contact@purepak.com.pk</a>
+    </div>
+    <p class="ssup-addr">PurePak · Main Golra Rd, near Golra Railway Station, Islamabad</p>
+  </section>
+
+  <div class="cartbar" id="shopCartBar" hidden>
+    <div class="cartbar-sum"><b id="shopCartQty">0</b> bottles · <b id="shopCartTotal">${API.fmtMoney(0)}</b></div>
+    <button class="btn primary" data-shop="checkout">Review &amp; place order</button>
   </div>`;
+}
+
+// ---- storefront basket wiring (called from onViewRender for route 'home') ----
+function applyCartToDom() {
+  let qty = 0, total = 0;
+  document.querySelectorAll('.prod').forEach(el => {
+    const n = shopCart.get(+el.dataset.pid) || 0;
+    el.classList.toggle('in-cart', n > 0);
+    const q = el.querySelector('[data-qty]');
+    if (q) q.textContent = n;
+    qty += n;
+    total += n * (Number(el.dataset.price) || 0);
+  });
+  const bar = document.getElementById('shopCartBar');
+  if (bar) {
+    bar.hidden = qty === 0;
+    const qEl = document.getElementById('shopCartQty');
+    const tEl = document.getElementById('shopCartTotal');
+    if (qEl) qEl.textContent = qty;
+    if (tEl) tEl.textContent = API.fmtMoney(total);
+  }
+  document.body.classList.toggle('has-cartbar', qty > 0);
+}
+
+async function shopCheckout() {
+  if (!shopCart.size) return ppToast('Add some water to your order first', 'warn');
+  const u = API.user;
+  await modalCreateOrder({
+    customer: { id: u.customer_id, name: u.customerName || u.name },
+    onPlaced: () => { shopCart.clear(); document.body.classList.remove('has-cartbar'); },
+  });
+  document.querySelectorAll('[data-itemqty]').forEach(inp => {
+    inp.value = shopCart.get(+inp.dataset.itemqty) || 0;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+async function onShopClick(e) {
+  const b = e.target.closest('[data-shop]');
+  if (!b) return;
+  const act = b.dataset.shop;
+  const pid = +b.dataset.pid;
+  if (act === 'add' || act === 'inc') shopCart.set(pid, (shopCart.get(pid) || 0) + 1);
+  else if (act === 'dec') {
+    const n = (shopCart.get(pid) || 0) - 1;
+    if (n > 0) shopCart.set(pid, n); else shopCart.delete(pid);
+  } else if (act === 'scroll-cat') {
+    document.getElementById('shopCat')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  } else if (act === 'checkout') {
+    return shopCheckout();
+  } else if (act === 'reorder') {
+    try {
+      const o = await API.order(+b.dataset.order);
+      shopCart.clear();
+      (o.items || []).forEach(it => shopCart.set(it.product_id, (shopCart.get(it.product_id) || 0) + it.qty));
+      applyCartToDom();
+      return shopCheckout();
+    } catch (err) { return ppToast(err.message || 'Could not load that order', 'bad'); }
+  }
+  applyCartToDom();
+}
+
+function initCustomerHome() {
+  applyCartToDom(); // re-apply basket after a fresh render (e.g. live price update)
+  if (_shopWired) return;
+  _shopWired = true;
+  document.getElementById('view').addEventListener('click', onShopClick);
 }
 
 // ================= RECEIPTS (scan -> staging -> verify -> ledger) =================

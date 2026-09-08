@@ -87,7 +87,7 @@ const nodeFetch = globalThis.fetch;
     receipts: ['Receipts'],
     team: ['Team', 'team-row'],
     payroll: ['Payroll', 'pay-row'],
-    home: ['Quick order'],
+    home: ['Choose your water', 'shop-hero'],
   };
 
   let firstLogin = true;

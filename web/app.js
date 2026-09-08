@@ -4,6 +4,7 @@
 // Post-render hooks: kick off live views (map) after their HTML is in the DOM
 window.onViewRender = function (route, view) {
   if (route === 'route' && typeof initSmartRoute === 'function') initSmartRoute();
+  if (route === 'home' && typeof initCustomerHome === 'function') initCustomerHome();
 };
 // toast alias used by views
 window.ppToast = function (msg, cls) { if (window.App) App.toast(msg, cls); };
@@ -250,7 +251,7 @@ const App = {
         if (API.user) this.refresh();
       }, 400);
     };
-    ['order', 'pricing', 'team', 'receipt', 'payroll'].forEach(ev => {
+    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer'].forEach(ev => {
       es.addEventListener(ev, bump);
       // EventSource 'message' fallback for untyped events
     });

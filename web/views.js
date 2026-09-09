@@ -1493,6 +1493,7 @@ async function modalReviewReceipt(id) {
         </select>
       </div>
     </div>
+    ${!isPP && ext.doc_kind && DOC_KIND_LABEL[ext.doc_kind] ? `<p class="muted" style="font-size:11px;margin:6px 0 0">AI read this as ${DOC_KIND_LABEL[ext.doc_kind]}${ext.direction === 'money_in' ? ' (money in)' : ext.direction === 'money_out' ? ' (money out)' : ''}${ext.reference_no ? ` · ref ${API.esc(String(ext.reference_no))}` : ''}${ext.date ? ` · ${API.esc(String(ext.date))}` : ''}${ext.notes ? ` · “${API.esc(String(ext.notes))}”` : ''}.</p>` : ''}
     ${isPP ? `<label class="muted" style="font-size:12px;margin-top:10px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="rvPending" ${ext.payment_status === 'pending' ? 'checked' : ''} style="width:auto;padding:0"> Payment pending on this receipt</label>` : ''}
     <label class="muted" style="font-size:12px;margin-top:10px;display:block">Note</label>
     <input id="rvMemo" class="input" style="width:100%" value="${API.esc(r.memo || '')}">
@@ -1652,12 +1653,23 @@ async function saveScannedReceipt() {
 }
 
 // editable "here's what the AI read" step, shown right after a scan
+const DOC_KIND_LABEL = {
+  sales_invoice: 'a sales invoice', purchase_bill: 'a supplier / purchase bill', cash_memo: 'a cash memo',
+  utility_bill: 'a utility bill', fuel: 'a fuel receipt', rent: 'a rent receipt', vehicle: 'a vehicle expense',
+  salary_slip: 'a salary slip', bank_slip: 'a bank slip', other: 'a receipt',
+};
 function modalConfirmScan(rec, kind) {
   const ex = rec.extracted || {};
   const items = ex.type === 'purepak' ? (ex.items || []) : (ex.line_items || []);
   const conf = ex.confidence != null ? Math.round(ex.confidence * 100) + '% confident' : '';
   const read = rec.ocr_status === 'done';
   const kinds = SCAN_KINDS[API.user.role] || SCAN_KINDS.agent;
+  // the AI's guess at the app kind, only if this role is allowed to file it
+  const aiKind = kinds.some(([v]) => v === ex.suggested_kind) ? ex.suggested_kind : null;
+  const selKind = rec.kind || aiKind || kind;
+  const docGuess = ex.doc_kind && DOC_KIND_LABEL[ex.doc_kind]
+    ? `We read this as ${DOC_KIND_LABEL[ex.doc_kind]}${ex.direction === 'money_in' ? ' (money in)' : ex.direction === 'money_out' ? ' (money out)' : ''}${ex.reference_no ? ` · ref ${API.esc(String(ex.reference_no))}` : ''}. Change the type if that's not right.`
+    : '';
   openModal(read ? 'Check what we read' : 'AI could not read this', `
     <div class="scan-note ${read ? 'ok' : 'warn'}">
       ${read
@@ -1665,9 +1677,10 @@ function modalConfirmScan(rec, kind) {
         : `The photo couldn't be read automatically. Fill in the details below.`}
     </div>
     <label class="muted">Type</label>
-    <select id="csKind" class="input" style="width:100%;margin-bottom:10px">
-      ${kinds.map(([v, l]) => `<option value="${v}" ${v === (rec.kind || kind) ? 'selected' : ''}>${l}</option>`).join('')}
+    <select id="csKind" class="input" style="width:100%;margin-bottom:${docGuess ? '4px' : '10px'}">
+      ${kinds.map(([v, l]) => `<option value="${v}" ${v === selKind ? 'selected' : ''}>${l}</option>`).join('')}
     </select>
+    ${docGuess ? `<p class="muted" style="font-size:11px;margin:0 0 10px">${docGuess}</p>` : ''}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
       <div><label class="muted">Total amount (PKR)</label><input id="csAmount" type="number" class="input" style="width:100%" value="${rec.amount != null ? rec.amount : ''}"></div>
       <div><label class="muted">Date on receipt</label><input id="csDate" class="input" style="width:100%" value="${API.esc(ex.date || '')}" placeholder="YYYY-MM-DD"></div>

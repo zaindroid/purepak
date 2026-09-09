@@ -290,22 +290,36 @@ function optimizeRoute(rows, start) {
 // PurePak receipts have a FIXED layout (sales receipt book page), so the prompt
 // describes it explicitly position-by-position instead of asking for generic OCR.
 const PUREPAK_RECEIPT_PROMPT = [
-  'This photo shows a paper receipt. It is one of two types.',
+  'You are reading a photo of a paper receipt, bill or invoice for a bottled-water company called PurePak.',
+  'Decide which of the two types it is, then return ONE JSON object of that shape. Never guess numbers that are not visible — use null.',
   '',
-  'TYPE A — PurePak sales receipt book page. Its layout is ALWAYS the same, top to bottom:',
-  '1. Top line: PurePak logo and the brand "PURE PAK" on the left; a printed serial number on the right (e.g. 1001).',
-  '2. A customer box with three pre-printed label lines, handwritten values after the colon:',
-  '   "Name :", "PH NO :", "Address:" (values may be blank).',
-  '3. An item table with header "It.No | Qty | Rate | Amount". The It.No column lists the bottle sizes 500ml, 1.5L, 6L, 12L, 19L in that order. In each size row, Qty, Rate (price per bottle) and Amount (Qty x Rate) may be handwritten; blank rows have no numbers.',
-  '4. A blue "Total" row — its value cell may be written or left blank.',
-  '5. A "Rupees in Word:" line. Some receipts have the word "Pending" handwritten near it, meaning the bill is unpaid.',
+  '=== TYPE A — a PurePak sales receipt book page (issued BY PurePak to a customer) ===',
+  'Fixed layout, top to bottom:',
+  '1. Top: PurePak logo + brand "PURE PAK" on the left; a printed serial number on the right (e.g. 1001).',
+  '2. Customer box: pre-printed labels "Name :", "PH NO :", "Address:" with handwritten values after the colon (may be blank).',
+  '3. Item table, header "It.No | Qty | Rate | Amount". It.No lists bottle sizes 500ml, 1.5L, 6L, 12L, 19L in that order. Qty, Rate (price per bottle) and Amount (Qty x Rate) may be handwritten; blank rows have no numbers.',
+  '4. A blue "Total" row — value cell may be written or blank.',
+  '5. A "Rupees in Word:" line; the word "Pending" handwritten near it means the bill is unpaid.',
+  'Return exactly:',
+  '{"type":"purepak","receipt_no":"<serial top-right>","customer_name":"<after Name :>","customer_phone":"<after PH NO : or null>","customer_address":"<after Address: or null>","items":[{"size":"500ml","qty":10,"rate":910,"amount":9100}],"total":<blue Total cell number or null>,"payment_status":"pending" | null,"amount_in_words":"<or null>","confidence":0.0-1.0}',
+  'items: include ONLY size rows with at least one handwritten number; null for missing numbers. If Total is blank, total = null. Never confuse the serial number with a quantity or amount.',
   '',
-  'For TYPE A return exactly this shape (fill from the positions above):',
-  '{"type":"purepak","receipt_no":"<serial number top-right, e.g. 1001>","customer_name":"<value after Name :>","customer_phone":"<value after PH NO : or null>","customer_address":"<value after Address: or null>","items":[{"size":"500ml","qty":10,"rate":910,"amount":9100},{"size":"1.5L","qty":10,"rate":910,"amount":9100},{"size":"19L","qty":null,"rate":null,"amount":4900}],"total":<number written in the blue Total cell, or null if blank>,"payment_status":"pending" if "Pending" is handwritten on the Rupees-in-word line else null,"amount_in_words":"<handwritten amount-in-words if present else null>","confidence":0.9}',
-  'Include in items ONLY size rows that have at least one handwritten number (qty, rate or amount). Use null for numbers not written. If the Total cell is blank, set total to null — do NOT invent it. Do not confuse the serial number with a quantity or amount.',
-  '',
-  'TYPE B — any other paper receipt / invoice. Return:',
-  '{"type":"generic","vendor":"<seller/issuer name or null>","date":"<YYYY-MM-DD or null>","amount":<grand total in PKR>,"line_items":[{"item":"<description>","qty":<number or null>,"price":<number or null>}],"confidence":0.9}',
+  '=== TYPE B — ANY other receipt / bill / invoice / cash memo ===',
+  'This covers: a supplier or shop bill to PurePak (bottles, caps, chemicals, packaging), a fuel/petrol receipt, a utility bill (electricity, water, gas, internet), rent, vehicle repair, a restaurant/general-store cash memo, a salary/wage slip, a bank deposit slip, or a sales invoice PurePak issued to a business customer on a non-book format.',
+  'Return exactly:',
+  '{"type":"generic",',
+  ' "doc_kind":"sales_invoice" | "purchase_bill" | "cash_memo" | "utility_bill" | "fuel" | "rent" | "vehicle" | "salary_slip" | "bank_slip" | "other",',
+  ' "direction":"money_in" | "money_out",   // money_in = PurePak received or sold; money_out = PurePak paid or bought',
+  ' "party":"<the OTHER party: the buyer if PurePak sold, the vendor/biller if PurePak paid; or null>",',
+  ' "date":"<YYYY-MM-DD or null>",',
+  ' "reference_no":"<invoice / bill / receipt / meter reference number, or null>",',
+  ' "currency":"<3-letter code, usually PKR>",',
+  ' "subtotal":<number or null>, "tax":<number or null>, "total":<grand total number>,',
+  ' "line_items":[{"item":"<description>","qty":<number or null>,"unit_price":<number or null>,"amount":<line total or null>}],',
+  ' "notes":"<short note if the receipt says something important e.g. \'advance\', \'balance due 15th\', \'paid via JazzCash\'; else null>",',
+  ' "confidence":0.0-1.0}',
+  'Guidance for direction: if the header/logo is PurePak and it lists a customer being billed for water -> money_in. If it is from a supplier, shop, petrol pump, utility company, landlord or is a salary slip -> money_out.',
+  'total is the final payable/received amount in the receipt currency. Strip currency symbols and thousands separators (write 9100 not "Rs 9,100").',
   '',
   'Respond with ONLY the JSON object. No markdown, no prose, no code fences.',
 ].join('\n');
@@ -349,49 +363,94 @@ async function extractReceipt(apiKey, imagePath) {
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) throw new Error('No JSON in Gemini response');
   const parsed = JSON.parse(m[0]);
+  // tolerate "Rs 9,100", "9100/-", "$120.50", plain numbers, or nonsense -> null
+  const money = (v) => {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    const s = String(v).replace(/[^\d.\-]/g, '');
+    const n = parseFloat(s);
+    return isFinite(n) ? n : null;
+  };
+  const isoDate = (v) => {
+    if (!v) return null;
+    const s = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    return isNaN(d) ? null : d.toISOString().slice(0, 10);
+  };
 
   if (parsed.type === 'purepak') {
-    const num = (v) => (v == null || v === '' || isNaN(Number(v)) ? null : Number(v));
     const SIZES = ['500ml', '1.5L', '6L', '12L', '19L'];
-    let items = Array.isArray(parsed.items) ? parsed.items : [];
-    items = items
+    let items = (Array.isArray(parsed.items) ? parsed.items : [])
       .map(it => ({
         size: SIZES.find(s => String(it.size || '').toLowerCase().includes(s.toLowerCase())) || String(it.size || 'item'),
-        qty: num(it.qty), rate: num(it.rate), amount: num(it.amount),
+        qty: money(it.qty), rate: money(it.rate), amount: money(it.amount),
       }))
-      .filter(it => it.qty != null || it.rate != null || it.amount != null);
-    // If the Total cell was left blank, sum the item amounts
-    let total = num(parsed.total);
+      .filter(it => it.qty != null || it.rate != null || it.amount != null)
+      .map(it => ({ ...it, amount: it.amount != null ? it.amount : (it.qty != null && it.rate != null ? it.qty * it.rate : null) }));
+    let total = money(parsed.total);
     if (total == null) total = items.reduce((s, it) => s + (it.amount || 0), 0) || null;
     return {
       type: 'purepak',
+      doc_kind: 'sales_invoice',
+      direction: 'money_in',
+      suggested_kind: 'sales',
       receipt_no: parsed.receipt_no != null ? String(parsed.receipt_no) : null,
+      reference_no: parsed.receipt_no != null ? String(parsed.receipt_no) : null,
       customer_name: parsed.customer_name || null,
       customer_phone: parsed.customer_phone || null,
       customer_address: parsed.customer_address || null,
       items,
       total,
-      total_from: num(parsed.total) != null ? 'written' : 'summed',
+      total_from: money(parsed.total) != null ? 'written' : 'summed',
       payment_status: String(parsed.payment_status || '').toLowerCase() === 'pending' ? 'pending' : null,
       amount_in_words: parsed.amount_in_words || null,
-      // mirror into the generic fields so cards/ledger keep working
+      // generic mirror so cards / ledger / review all keep working
       vendor: parsed.customer_name || 'PurePak sale',
       date: null,
       amount: total,
-      line_items: items.map(it => ({ item: it.size, qty: it.qty, price: it.rate, amount: it.amount })),
+      line_items: items.map(it => ({ item: it.size, qty: it.qty, unit_price: it.rate, price: it.rate, amount: it.amount })),
       currency: 'PKR',
-      confidence: num(parsed.confidence),
+      confidence: money(parsed.confidence),
     };
   }
 
+  // ---- generic: any bill / invoice / memo, sales OR purchase ----
+  const dir = parsed.direction === 'money_in' ? 'money_in' : (parsed.direction === 'money_out' ? 'money_out' : null);
+  const docKind = String(parsed.doc_kind || 'other');
+  // map to the app's receipt kinds (expense | income | sales | agent_commission | other)
+  let suggested_kind = 'expense';
+  if (dir === 'money_in') suggested_kind = docKind === 'sales_invoice' || docKind === 'cash_memo' ? 'sales' : 'income';
+  else if (dir === 'money_out') suggested_kind = 'expense';
+  else if (docKind === 'sales_invoice') suggested_kind = 'sales';
+  const lineItems = (Array.isArray(parsed.line_items) ? parsed.line_items : []).map(it => {
+    const qty = money(it.qty), unit = money(it.unit_price != null ? it.unit_price : it.price);
+    const amount = money(it.amount) != null ? money(it.amount) : (qty != null && unit != null ? qty * unit : null);
+    return { item: String(it.item || it.description || 'item'), qty, unit_price: unit, price: unit, amount };
+  }).filter(it => it.item || it.amount != null || it.qty != null);
+  let total = money(parsed.total);
+  if (total == null) {
+    const sub = money(parsed.subtotal), tax = money(parsed.tax);
+    if (sub != null) total = sub + (tax || 0);
+    else { const s = lineItems.reduce((a, it) => a + (it.amount || 0), 0); total = s || null; }
+  }
   return {
     type: 'generic',
-    vendor: parsed.vendor || null,
-    date: parsed.date || null,
-    amount: Number(parsed.amount) > 0 ? Number(parsed.amount) : null,
-    line_items: Array.isArray(parsed.line_items) ? parsed.line_items : [],
-    currency: parsed.currency || 'PKR',
-    confidence: Number(parsed.confidence) || null,
+    doc_kind: docKind,
+    direction: dir,
+    suggested_kind,
+    party: parsed.party || parsed.vendor || null,
+    vendor: parsed.party || parsed.vendor || null,   // keep `vendor` for existing UI
+    date: isoDate(parsed.date),
+    reference_no: parsed.reference_no != null ? String(parsed.reference_no) : null,
+    currency: (parsed.currency || 'PKR').toString().toUpperCase().slice(0, 3),
+    subtotal: money(parsed.subtotal),
+    tax: money(parsed.tax),
+    amount: total != null && total > 0 ? total : null,
+    total: total != null && total > 0 ? total : null,
+    line_items: lineItems,
+    notes: parsed.notes || null,
+    confidence: money(parsed.confidence),
   };
 }
 
@@ -1352,8 +1411,23 @@ async function handleApi(req, res, url) {
     if (key) {
       extractReceipt(key, path.join(RECDIR, rid + '_' + safe + '.' + ext))
         .then(out => {
-          db.prepare('UPDATE receipts SET extracted=?, ocr_status=?, amount=CASE WHEN amount IS NULL AND ? IS NOT NULL THEN ? ELSE amount END, vendor=CASE WHEN vendor IS NULL THEN ? ELSE vendor END, memo=CASE WHEN memo IS NULL THEN ? ELSE memo END WHERE id=?')
-            .run(JSON.stringify(out), 'done', out.amount, out.amount, out.vendor || null, out.memo || null, rid);
+          // adopt the AI's classification only if the scanner left the default 'expense'
+          const KINDS = ['expense', 'income', 'sales', 'agent_commission', 'other'];
+          const aiKind = KINDS.includes(out.suggested_kind) ? out.suggested_kind : null;
+          const useKind = (kind === 'expense' && aiKind) ? aiKind : kind;
+          // a helpful auto-memo when the scanner didn't type one
+          const autoMemo = [
+            out.doc_kind && out.doc_kind !== 'other' ? out.doc_kind.replace(/_/g, ' ') : null,
+            out.reference_no ? '#' + out.reference_no : null,
+            out.date || null,
+            out.notes || null,
+          ].filter(Boolean).join(' · ') || null;
+          db.prepare(`UPDATE receipts SET extracted=?, ocr_status='done', kind=?,
+                        amount = CASE WHEN amount IS NULL AND ? IS NOT NULL THEN ? ELSE amount END,
+                        vendor = CASE WHEN vendor IS NULL THEN ? ELSE vendor END,
+                        memo   = CASE WHEN memo   IS NULL THEN ? ELSE memo   END
+                      WHERE id=?`)
+            .run(JSON.stringify(out), useKind, out.amount, out.amount, out.vendor || null, autoMemo, rid);
           // tell the review team a new scan is waiting in staging
           const rc2 = db.prepare('SELECT status, vendor, amount FROM receipts WHERE id=?').get(rid);
           if (rc2 && rc2.status === 'pending') {

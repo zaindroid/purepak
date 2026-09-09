@@ -89,6 +89,7 @@ const API = (() => {
       return g('/receipts' + (qs ? '?' + qs : ''));
     },
     receiptImage: (id) => '/api/receipts/' + id,
+    updateReceipt: (id, b) => patch('/receipts/' + id, b),
     approveReceipt: (id, b) => req('POST', '/receipts/' + id + '/approve', b),
     rejectReceipt: (id, reason) => req('POST', '/receipts/' + id + '/reject', { reason: reason || null }),
     notifications: () => g('/notifications'),
@@ -105,6 +106,10 @@ const API = (() => {
     ledger: () => g('/ledger'),
     ledgerSummary: (month) => g('/ledger/summary' + (month ? '?month=' + month : '')),
     addLedger: (b) => post('/ledger', b),
+    voidLedger: (id, reason) => post('/ledger/' + id + '/void', { reason }),
+    correctLedger: (id, b) => post('/ledger/' + id + '/correct', b),
+    auditLog: () => g('/audit'),
+    auditVerify: () => g('/audit/verify'),
     kpis: () => g('/kpis'),
     monthly: () => g('/analytics/monthly'),
     topCustomers: () => g('/analytics/top-customers'),

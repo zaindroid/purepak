@@ -69,6 +69,57 @@ function notify(userIds, kind, title, body, ref) {
 function staffUserIds() {
   return db.prepare(`SELECT id FROM users WHERE role IN ('admin','manager','finance') AND status='active'`).all().map(r => r.id);
 }
+
+// ---------- tamper-evident books: hash-chained audit trail + append-only ledger ----------
+function nowStamp() { return new Date().toISOString().slice(0, 19).replace('T', ' '); }
+// exact string the hash is computed over — MUST match auditVerify() byte for byte
+function auditPayload(prevHash, at, actorId, action, entity, entityId, beforeJson, afterJson) {
+  return [prevHash, at, actorId || 0, action, entity, entityId || 0, beforeJson || '', afterJson || ''].join('|');
+}
+function auditHead() {
+  const row = db.prepare('SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1').get();
+  return row ? row.hash : 'GENESIS';
+}
+function audit(actor, action, entity, entityId, summary, before, after) {
+  const prev = auditHead();
+  const at = nowStamp();
+  const b = before == null ? '' : JSON.stringify(before);
+  const a = after == null ? '' : JSON.stringify(after);
+  const hash = crypto.createHash('sha256')
+    .update(auditPayload(prev, at, actor ? actor.id : 0, action, entity, entityId, b, a)).digest('hex');
+  db.prepare(`INSERT INTO audit_log(at,actor_id,actor_name,actor_role,action,entity,entity_id,summary,before_json,after_json,prev_hash,hash)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(at, actor ? actor.id : null, actor ? actor.name : 'system', actor ? actor.role : null,
+      action, entity, entityId || null, summary || null, b || null, a || null, prev, hash);
+  return hash;
+}
+// recompute the whole chain; returns the first row whose stored hash doesn't match
+function auditVerify() {
+  const rows = db.prepare('SELECT * FROM audit_log ORDER BY id ASC').all();
+  let prev = 'GENESIS';
+  for (const r of rows) {
+    const h = crypto.createHash('sha256')
+      .update(auditPayload(prev, r.at, r.actor_id, r.action, r.entity, r.entity_id, r.before_json, r.after_json)).digest('hex');
+    if (r.prev_hash !== prev || r.hash !== h) return { ok: false, count: rows.length, broken_at: r.id };
+    prev = r.hash;
+  }
+  return { ok: true, count: rows.length, head: prev };
+}
+// the ONLY way a ledger row is created — always writes a matching audit entry
+function postLedger(actor, e) {
+  const at = e.at || nowStamp();
+  const r = db.prepare(`INSERT INTO ledger(account,type,amount,ref,memo,at,status,corrects,entered_by)
+                        VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(e.account, e.type, Number(e.amount), e.ref || null, e.memo || null, at,
+      e.corrects ? 'correction' : 'active', e.corrects || null, actor ? actor.name : 'system');
+  const row = db.prepare('SELECT * FROM ledger WHERE id=?').get(r.lastInsertRowid);
+  // the row's own audit line is always a create; void/correct handlers add their
+  // own semantic entry on top.
+  audit(actor, 'ledger.create', 'ledger', row.id,
+    `${e.type === 'income' ? '+' : '−'} Rs ${Math.round(Number(e.amount))} · ${e.account}${e.memo ? ' · ' + e.memo : ''}`,
+    null, row);
+  return row;
+}
 function authUser(req) {
   const h = req.headers['authorization'] || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -103,13 +154,17 @@ function newSession(user) {
 // ---------- auth ----------
 function userView(u) {
   const agent = u.agent_id ? db.prepare('SELECT name FROM agents WHERE id=?').get(u.agent_id) : null;
-  const cust = u.customer_id ? db.prepare('SELECT name, type FROM customers WHERE id=?').get(u.customer_id) : null;
+  const cust = u.customer_id ? db.prepare('SELECT name, type, phone, address, area, contact_name FROM customers WHERE id=?').get(u.customer_id) : null;
   return {
     id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role,
     agent_id: u.agent_id, customer_id: u.customer_id,
     agentName: agent ? agent.name : null,
     customerName: cust ? cust.name : null,
     customerType: cust ? cust.type : null,
+    customerPhone: cust ? cust.phone : null,
+    customerAddress: cust ? cust.address : null,
+    customerArea: cust ? cust.area : null,
+    customerContact: cust ? cust.contact_name : null,
     salary: u.salary, status: u.status, last_login_at: u.last_login_at,
   };
 }
@@ -671,20 +726,25 @@ async function handleApi(req, res, url) {
     return json(res, 201, db.prepare('SELECT * FROM customers WHERE id=?').get(r.lastInsertRowid));
   }
   if (method === 'PATCH' && parts[1] === 'customers' && parts.length === 3 && !isNaN(+parts[2])) {
-    requireRole(user, ['admin', 'manager', 'finance']);
+    const cid = +parts[2];
+    // a customer may edit ONLY their own contact details (never their pricing type)
+    const ownRecord = user && user.role === 'customer' && user.customer_id === cid;
+    if (!ownRecord) requireRole(user, ['admin', 'manager', 'finance']);
     const b = await readBody(req);
-    const cur = db.prepare('SELECT * FROM customers WHERE id=?').get(+parts[2]);
+    const cur = db.prepare('SELECT * FROM customers WHERE id=?').get(cid);
     if (!cur) return err(res, 404, 'Customer not found');
     const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
+    const wantType = !ownRecord && b.type && types.includes(b.type) ? b.type : cur.type;
     db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=? WHERE id=?`)
-      .run(b.name != null ? String(b.name).trim() || cur.name : cur.name,
+      .run(ownRecord ? cur.name : (b.name != null ? String(b.name).trim() || cur.name : cur.name),
         b.contact_name !== undefined ? (b.contact_name || null) : cur.contact_name,
         b.phone != null ? String(b.phone).trim() || cur.phone : cur.phone,
         b.email !== undefined ? (b.email || null) : cur.email,
         b.address !== undefined ? (b.address || null) : cur.address,
         b.area !== undefined ? (b.area || null) : cur.area,
-        b.type && types.includes(b.type) ? b.type : cur.type,
-        +parts[2]);
+        wantType,
+        cid);
+    b.type = wantType; // downstream checks use b.type
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
     // a customer-type change reprices that ONE customer's catalog — nudge only their shop
     if (b.type && types.includes(b.type) && b.type !== cur.type) {
@@ -765,6 +825,9 @@ async function handleApi(req, res, url) {
     else custId = b.customer_id;
     const cust = custId && db.prepare('SELECT * FROM customers WHERE id=?').get(custId);
     if (!cust) return err(res, 400, 'customer_id invalid');
+    // a self-serve customer must have a delivery address + phone on file before ordering
+    if (user.role === 'customer' && (!cust.address || !String(cust.address).trim() || !cust.phone || !String(cust.phone).trim()))
+      return err(res, 400, 'Add a delivery address and phone number to your profile before placing an order');
     const items = Array.isArray(b.items) ? b.items : [];
     let total = 0;
     const prepared = items.map(it => {
@@ -817,14 +880,29 @@ async function handleApi(req, res, url) {
       if (!allowed[cur.status] || !allowed[cur.status].includes(b.status))
         return err(res, 400, `Cannot move ${cur.status} -> ${b.status}`);
       db.prepare('UPDATE orders SET status=? WHERE id=?').run(b.status, oid);
-      if (b.status === 'in_delivery') {
+      const openDelivery = db.prepare(`SELECT * FROM deliveries WHERE order_id=? AND status IN ('pending','out_for_delivery') ORDER BY id DESC LIMIT 1`).get(oid);
+      if (b.status === 'confirmed' && !openDelivery) {
+        // confirming an order puts it straight on the delivery team's board (pending)
         db.prepare(`INSERT INTO deliveries(order_id,driver,vehicle,status,scheduled_at) VALUES (?,?,?,?,?)`)
-          .run(oid, b.driver || 'Unassigned', b.vehicle || null, 'out_for_delivery', b.scheduled_at || new Date().toISOString().slice(0, 19).replace('T', ' '));
+          .run(oid, b.driver || 'Unassigned', b.vehicle || null, 'pending',
+            b.scheduled_at || new Date(Date.now() + 864e5).toISOString().slice(0, 19).replace('T', ' '));
+      }
+      if (b.status === 'in_delivery') {
+        if (openDelivery) {
+          db.prepare(`UPDATE deliveries SET status='out_for_delivery', driver=CASE WHEN driver='Unassigned' AND ? IS NOT NULL THEN ? ELSE driver END WHERE id=?`)
+            .run(b.driver || null, b.driver || null, openDelivery.id);
+        } else {
+          db.prepare(`INSERT INTO deliveries(order_id,driver,vehicle,status,scheduled_at) VALUES (?,?,?,?,?)`)
+            .run(oid, b.driver || 'Unassigned', b.vehicle || null, 'out_for_delivery', b.scheduled_at || new Date().toISOString().slice(0, 19).replace('T', ' '));
+        }
       }
       if (b.status === 'delivered') {
         db.prepare(`UPDATE deliveries SET status='delivered', delivered_at=datetime('now') WHERE order_id=? AND status IN ('pending','out_for_delivery')`).run(oid);
       }
-      // Notify the customer (and staff, when the acting user isn't already staff)
+      if (b.status === 'cancelled') {
+        db.prepare(`UPDATE deliveries SET status='failed' WHERE order_id=? AND status IN ('pending','out_for_delivery')`).run(oid);
+      }
+      // Notify the customer, the delivery team, and staff
       {
         const cust = db.prepare('SELECT c.*, u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
         if (cust && cust.uid) {
@@ -832,6 +910,12 @@ async function handleApi(req, res, url) {
           const bodies = { confirmed: `Order #${oid} has been confirmed.`, in_delivery: `Order #${oid} is out for delivery.`, delivered: `Order #${oid} has been delivered.`, cancelled: `Order #${oid} was cancelled.` };
           const t = titles[b.status];
           if (t) notify([cust.uid], 'order', t, bodies[b.status], `order#${oid}`);
+        }
+        if (b.status === 'confirmed' || b.status === 'in_delivery') {
+          const drivers = db.prepare(`SELECT id FROM users WHERE role='delivery' AND status='active'`).all().map(r => r.id).filter(x => x !== user.id);
+          notify(drivers, 'order',
+            b.status === 'confirmed' ? `New delivery to schedule · Order #${oid}` : `Order #${oid} — out for delivery`,
+            `${cust ? cust.name : 'Customer'}${cust && cust.area ? ' · ' + cust.area : ''}`, `order#${oid}`);
         }
         if (!['admin', 'manager', 'finance'].includes(user.role)) notify(staffUserIds().filter(x => x !== user.id), 'order', `Order #${oid} -> ${b.status}`, null, `order#${oid}`);
       }
@@ -843,10 +927,9 @@ async function handleApi(req, res, url) {
       db.prepare('UPDATE orders SET paid=?, payment_status=? WHERE id=?').run(paid, payStatus, oid);
       // ledger income for the new amount received
       const inc = paid - cur.paid;
-      if (inc > 0) db.prepare('INSERT INTO ledger(account,type,amount,ref,memo,at) VALUES (?,?,?,?,?,?)')
-        .run('Cash / Bank', 'income', inc, 'order#' + oid, 'Water sale - ' + (b.memo || 'customer payment'), new Date().toISOString().slice(0, 19).replace('T', ' '));
-      else if (inc < 0) db.prepare('INSERT INTO ledger(account,type,amount,ref,memo,at) VALUES (?,?,?,?,?,?)')
-        .run('Cash / Bank', 'expense', -inc, 'order#' + oid, 'Payment refund', new Date().toISOString().slice(0, 19).replace('T', ' '));
+      if (inc > 0) postLedger(user, { account: 'Cash / Bank', type: 'income', amount: inc, ref: 'order#' + oid, memo: 'Water sale - ' + (b.memo || 'customer payment') });
+      else if (inc < 0) postLedger(user, { account: 'Cash / Bank', type: 'expense', amount: -inc, ref: 'order#' + oid, memo: 'Payment refund' });
+      if (inc !== 0) audit(user, 'order.pay', 'order', oid, `Payment on order #${oid}: paid ${cur.paid} → ${paid} of ${cur.total}`, { paid: cur.paid }, { paid });
     }
     // the customer is notified in the block above; refresh the office + agents only
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
@@ -988,10 +1071,9 @@ async function handleApi(req, res, url) {
     const u = requireRole(user, ['admin', 'manager', 'finance']);
     if (cur.status !== 'accrued') return err(res, 400, 'Commission already settled');
     db.prepare(`UPDATE commissions SET status='paid', paid_at=datetime('now') WHERE id=?`).run(cid);
-    db.prepare('INSERT INTO ledger(account,type,amount,ref,memo,at) VALUES (?,?,?,?,?,?)')
-      .run('Agent commissions', 'expense', cur.amount, 'comm#' + cid,
-        'Commission payout - ' + (db.prepare('SELECT name FROM agents WHERE id=?').get(cur.agent_id)?.name || ''),
-        new Date().toISOString().slice(0, 19).replace('T', ' '));
+    const agentName = db.prepare('SELECT name FROM agents WHERE id=?').get(cur.agent_id)?.name || '';
+    postLedger(user, { account: 'Agent commissions', type: 'expense', amount: cur.amount, ref: 'comm#' + cid, memo: 'Commission payout - ' + agentName });
+    audit(user, 'commission.settle', 'commission', cid, `Settled commission #${cid} (Rs ${cur.amount}) for ${agentName}`, { status: 'accrued' }, { status: 'paid' });
     return json(res, 200, db.prepare('SELECT * FROM commissions WHERE id=?').get(cid));
   }
 
@@ -1064,10 +1146,12 @@ async function handleApi(req, res, url) {
     db.prepare(`UPDATE payroll SET status='paid', paid_at=datetime('now'),
                 ledger_ref=? WHERE id=?`).run('payroll#' + entry.period + '#' + entry.user_id, id);
     const acct = isAgent ? 'Commissions' : 'Salaries & Wages';
-    db.prepare('INSERT INTO ledger(account,type,amount,ref,memo,at) VALUES (?,?,?,?,?,?)')
-      .run(acct, 'expense', entry.amount, 'payroll#' + entry.period + '#' + entry.user_id,
-        (isAgent ? 'Commission payout - ' : 'Salary payout - ') + (u ? u.name : 'employee'),
-        new Date().toISOString().slice(0, 19).replace('T', ' '));
+    postLedger(user, {
+      account: acct, type: 'expense', amount: entry.amount,
+      ref: 'payroll#' + entry.period + '#' + entry.user_id,
+      memo: (isAgent ? 'Commission payout - ' : 'Salary payout - ') + (u ? u.name : 'employee'),
+    });
+    audit(user, 'payroll.pay', 'payroll', id, `Paid ${entry.period} payroll (Rs ${entry.amount}) to ${u ? u.name : 'employee'}`, { status: 'accrued' }, { status: 'paid' });
     if (isAgent && u.agent_id) {
       // Settle the underlying accrued commissions so they don't double-count in Commissions.
       db.prepare(`UPDATE commissions SET status='paid', paid_at=datetime('now')
@@ -1097,14 +1181,75 @@ async function handleApi(req, res, url) {
       by_account: byAccount,
     });
   }
-  if (method === 'POST' && parts[1] === 'ledger') {
+  if (method === 'POST' && parts[1] === 'ledger' && parts.length === 2) {
     requireRole(user, ['admin', 'manager', 'finance']);
     const b = await readBody(req);
     if (!b.account || !(Number(b.amount) > 0)) return err(res, 400, 'account and positive amount required');
     const type = b.type === 'expense' ? 'expense' : 'income';
-    const r = db.prepare('INSERT INTO ledger(account,type,amount,ref,memo) VALUES (?,?,?,?,?)')
-      .run(b.account, type, Number(b.amount), b.ref || null, b.memo || null);
-    return json(res, 201, db.prepare('SELECT * FROM ledger WHERE id=?').get(r.lastInsertRowid));
+    return json(res, 201, postLedger(user, { account: String(b.account).trim(), type, amount: Number(b.amount), ref: b.ref || null, memo: b.memo || null }));
+  }
+  // --- append-only corrections: VOID reverses an entry, CORRECT reverses + reposts. Admin only. ---
+  if (method === 'POST' && parts[1] === 'ledger' && parts.length === 4 && parts[3] === 'void' && !isNaN(+parts[2])) {
+    requireRole(user, ['admin']);
+    const cur = db.prepare('SELECT * FROM ledger WHERE id=?').get(+parts[2]);
+    if (!cur) return err(res, 404, 'Entry not found');
+    if (cur.status !== 'active') return err(res, 400, 'Entry is already ' + cur.status);
+    const b = await readBody(req);
+    const reason = String(b.reason || '').trim();
+    if (reason.length < 3) return err(res, 400, 'A reason is required to void an entry');
+    db.prepare(`UPDATE ledger SET status='reversed', void_reason=? WHERE id=?`).run(reason, cur.id);
+    const rev = postLedger(user, {
+      account: cur.account, type: cur.type === 'income' ? 'expense' : 'income',
+      amount: cur.amount, ref: cur.ref, corrects: cur.id,
+      memo: `Reversal of entry #${cur.id} — ${reason}`,
+    });
+    audit(user, 'ledger.void', 'ledger', cur.id,
+      `Voided entry #${cur.id} (${cur.type === 'income' ? '+' : '−'} Rs ${Math.round(cur.amount)} · ${cur.account}) — ${reason}`,
+      cur, { status: 'reversed', reversal_entry: rev.id });
+    return json(res, 200, { voided: cur.id, reversal: rev });
+  }
+  if (method === 'POST' && parts[1] === 'ledger' && parts.length === 4 && parts[3] === 'correct' && !isNaN(+parts[2])) {
+    requireRole(user, ['admin']);
+    const cur = db.prepare('SELECT * FROM ledger WHERE id=?').get(+parts[2]);
+    if (!cur) return err(res, 404, 'Entry not found');
+    if (cur.status !== 'active') return err(res, 400, 'Entry is already ' + cur.status);
+    const b = await readBody(req);
+    const reason = String(b.reason || '').trim();
+    if (reason.length < 3) return err(res, 400, 'A reason is required to correct an entry');
+    const type = b.type === 'expense' ? 'expense' : 'income';
+    const amount = Number(b.amount);
+    const account = String(b.account || cur.account).trim();
+    if (!account || !(amount > 0)) return err(res, 400, 'Valid account and positive amount required');
+    db.prepare(`UPDATE ledger SET status='reversed', void_reason=? WHERE id=?`).run('Corrected: ' + reason, cur.id);
+    const rev = postLedger(user, {
+      account: cur.account, type: cur.type === 'income' ? 'expense' : 'income',
+      amount: cur.amount, ref: cur.ref, corrects: cur.id,
+      memo: `Reversal of entry #${cur.id} (correction) — ${reason}`,
+    });
+    const fixed = postLedger(user, {
+      account, type, amount, ref: cur.ref, corrects: cur.id,
+      memo: (b.memo && String(b.memo).trim()) || cur.memo || `Corrected entry #${cur.id}`,
+    });
+    audit(user, 'ledger.correct', 'ledger', cur.id,
+      `Corrected entry #${cur.id} — ${reason}`,
+      { account: cur.account, type: cur.type, amount: cur.amount, memo: cur.memo },
+      { account, type, amount, memo: fixed.memo, reversal_entry: rev.id, new_entry: fixed.id });
+    return json(res, 200, { corrected: cur.id, reversal: rev, entry: fixed });
+  }
+  // --- audit trail (hash-chained) ---
+  if (method === 'GET' && parts[1] === 'audit' && parts[2] === 'verify') {
+    requireRole(user, ['admin', 'manager']);
+    return json(res, 200, auditVerify());
+  }
+  if (method === 'GET' && parts[1] === 'audit' && parts.length === 2) {
+    requireRole(user, ['admin', 'manager']);
+    const rows = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 400').all();
+    for (const r of rows) {
+      try { r.before = r.before_json ? JSON.parse(r.before_json) : null; } catch { r.before = r.before_json; }
+      try { r.after = r.after_json ? JSON.parse(r.after_json) : null; } catch { r.after = r.after_json; }
+      delete r.before_json; delete r.after_json;
+    }
+    return json(res, 200, { entries: rows, verify: auditVerify() });
   }
 
   // ---- receipts: upload (image) -> Gemini OCR -> searchable record, optional ledger post ----
@@ -1147,6 +1292,34 @@ async function handleApi(req, res, url) {
       db.prepare(`UPDATE receipts SET ocr_status='failed' WHERE id=?`).run(rid);
     }
     return json(res, 201, db.prepare('SELECT * FROM receipts WHERE id=?').get(rid));
+  }
+  // ---- receipts: edit staging fields (scanner corrects the AI read, or a reviewer tweaks) ----
+  if (method === 'PATCH' && parts[1] === 'receipts' && parts.length === 3 && !isNaN(+parts[2])) {
+    requireRole(user, ['admin', 'manager', 'finance', 'agent', 'delivery']);
+    const rid = +parts[2];
+    const rc = db.prepare('SELECT * FROM receipts WHERE id=?').get(rid);
+    if (!rc) return err(res, 404, 'Receipt not found');
+    if (rc.posted || rc.status === 'approved') return err(res, 400, 'This receipt is already finalised');
+    const isReviewer = ['admin', 'manager', 'finance'].includes(user.role);
+    if (!isReviewer && rc.recorded_by !== user.name) return err(res, 403, 'You can only edit receipts you scanned');
+    const b = await readBody(req);
+    const kind = ['expense', 'income', 'sales', 'agent_commission', 'other'].includes(b.kind) ? b.kind : rc.kind;
+    const amount = b.amount === '' || b.amount == null ? rc.amount : Number(b.amount);
+    const vendor = b.vendor !== undefined ? (String(b.vendor).trim() || null) : rc.vendor;
+    const memo = b.memo !== undefined ? (String(b.memo).trim() || null) : rc.memo;
+    // keep the extracted blob in sync with the corrected scalars
+    let extracted = rc.extracted;
+    try {
+      const ex = rc.extracted ? JSON.parse(rc.extracted) : {};
+      if (b.amount !== undefined) ex.amount = amount;
+      if (b.vendor !== undefined) ex.vendor = vendor;
+      if (b.date !== undefined) ex.date = b.date || null;
+      ex.edited_by = user.name;
+      extracted = JSON.stringify(ex);
+    } catch { /* leave as-is */ }
+    db.prepare('UPDATE receipts SET kind=?, amount=?, vendor=?, memo=?, extracted=? WHERE id=?')
+      .run(kind, amount, vendor, memo, extracted, rid);
+    return json(res, 200, db.prepare('SELECT * FROM receipts WHERE id=?').get(rid));
   }
   // ---- notifications (in-app feed) ----
   if (method === 'GET' && parts[1] === 'notifications' && parts.length === 2) {
@@ -1255,8 +1428,9 @@ async function handleApi(req, res, url) {
       : rc.kind === 'income' ? 'Cash / Bank' : 'Expenses (receipt)';
     const memo = (rc.memo || (rc.vendor ? rc.vendor : 'Receipt')) + ' (receipt#' + rid + ')';
     const lref = 'receipt#' + rid;
-    db.prepare('INSERT INTO ledger(account,type,amount,ref,memo) VALUES (?,?,?,?,?)').run(account, type, Number(rc.amount), lref, memo);
+    const led = postLedger(user, { account, type, amount: Number(rc.amount), ref: lref, memo });
     db.prepare('UPDATE receipts SET posted=1, posted_ref=? WHERE id=?').run(lref, rid);
+    audit(user, 'receipt.post', 'receipt', rid, `Posted receipt #${rid} to the ledger as entry #${led.id} (Rs ${Math.round(Number(rc.amount))} · ${account})`, { posted: 0 }, { posted: 1, ledger_entry: led.id });
     return json(res, 200, db.prepare('SELECT * FROM receipts WHERE id=?').get(rid));
   }
 

@@ -705,3 +705,30 @@ body.has-cartbar .wa-fab{bottom:calc(80px + env(safe-area-inset-bottom))}
   .shop-hero h1{font-size:20px}
   .prod-cta .btn,.prod-add{font-size:12px;padding:9px 8px}
 }
+
+/* ===== tamper-evident books: integrity banner, ledger actions, audit trail ===== */
+.integ{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  font-size:12.5px;font-weight:600;line-height:1.4;
+  padding:10px 12px;border-radius:11px;margin-bottom:12px;
+}
+.integ svg{width:16px;height:16px;flex:none}
+.integ.ok{background:var(--green-bg);color:var(--green-ink);border:1px solid #bfe8d2}
+.integ.bad{background:var(--red-bg);color:var(--red-ink);border:1px solid #f3c1c1}
+.integ .btn{margin-left:auto}
+.integ code{font-size:11px;background:rgba(0,0,0,.06);padding:1px 5px;border-radius:5px}
+
+.ledger-acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.tbl tr.row-reversed td{opacity:.6}
+.tbl tr.row-reversed .cell-main span:first-child{text-decoration:line-through}
+
+.aud-diff{font-size:11px;margin-top:3px;word-break:break-word}
+.aud-diff code{background:rgba(0,0,0,.05);padding:0 3px;border-radius:4px}
+
+/* receipt scan: "here's what the AI read" confirm step */
+.scan-note{font-size:12.5px;line-height:1.5;padding:10px 12px;border-radius:10px;margin-bottom:12px}
+.scan-note.ok{background:var(--blue-50);color:var(--blue-800);border:1px solid #cfe3f7}
+.scan-note.warn{background:var(--amber-bg);color:var(--amber-ink);border:1px solid #f3dcb0}
+.scan-items{border:1px solid var(--line-2);border-radius:10px;padding:4px 10px}
+.scan-items .item-line{border-bottom:1px dashed var(--line)}
+.scan-items .item-line:last-child{border-bottom:none}

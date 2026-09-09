@@ -556,6 +556,19 @@ const App = {
         break;
       case 'add-expense': stop(); modalAddLedger('expense'); break;
       case 'add-income': stop(); modalAddLedger('income'); break;
+      case 'ledger-void': stop(); modalVoidLedger(+id); break;
+      case 'ledger-correct': stop(); modalCorrectLedger(+id); break;
+      case 'save-my-profile': stop(); {
+        const phone = document.getElementById('cpPhone').value.trim();
+        const address = document.getElementById('cpAddress').value.trim();
+        const area = document.getElementById('cpArea').value.trim() || null;
+        if (phone.length < 7) { this.toast('Enter a valid phone number', 'warn'); break; }
+        try {
+          await API.updateCustomer(API.user.customer_id, { phone, address, area });
+          const me = await API.me(); API.setAuth(API.token, me);
+          this.toast('Profile saved', 'ok'); this.refresh();
+        } catch (e) { this.toast(e.message, 'bad'); }
+      } break;
       case 'receipt-scan': stop(); modalScanReceipt(); break;
       case 'receipt-review': stop(); modalReviewReceipt(+id); break;
       case 'receipt-reject': stop();

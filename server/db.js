@@ -180,7 +180,29 @@ function migrate(db) {
     amount REAL NOT NULL,
     ref TEXT,
     memo TEXT,
-    at TEXT NOT NULL DEFAULT (datetime('now'))
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- append-only: entries are never edited/deleted. active | reversed
+    -- (a later reversing entry cancels it) | correction (this row IS a fix).
+    status TEXT NOT NULL DEFAULT 'active',
+    corrects INTEGER,        -- id of the entry this one reverses / corrects
+    entered_by TEXT,         -- name of the actor (or 'system')
+    void_reason TEXT
+  );
+
+  -- hash-chained, append-only audit trail of every money movement. Each row's
+  -- hash folds in the previous row's hash, so any silent edit to history breaks
+  -- the chain from that point on (checked by GET /api/audit/verify).
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL DEFAULT (datetime('now')),
+    actor_id INTEGER, actor_name TEXT, actor_role TEXT,
+    action TEXT NOT NULL,       -- ledger.create | ledger.void | ledger.correct | order.pay | commission.settle | payroll.pay | receipt.post
+    entity TEXT NOT NULL,       -- ledger | order | commission | payroll | receipt
+    entity_id INTEGER,
+    summary TEXT,
+    before_json TEXT, after_json TEXT,
+    prev_hash TEXT NOT NULL,
+    hash TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS receipts (
@@ -217,6 +239,13 @@ function migrate(db) {
   if (!ucols.includes('salary')) db.exec('ALTER TABLE users ADD COLUMN salary REAL');
   if (!ucols.includes('status')) db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled'))`);
   if (!ucols.includes('last_login_at')) db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+
+  // ledger: append-only + audit-trail columns (added for the tamper-evident books)
+  const lcols = db.prepare(`PRAGMA table_info(ledger)`).all().map(c => c.name);
+  if (!lcols.includes('status')) db.exec(`ALTER TABLE ledger ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`);
+  if (!lcols.includes('corrects')) db.exec('ALTER TABLE ledger ADD COLUMN corrects INTEGER');
+  if (!lcols.includes('entered_by')) db.exec('ALTER TABLE ledger ADD COLUMN entered_by TEXT');
+  if (!lcols.includes('void_reason')) db.exec('ALTER TABLE ledger ADD COLUMN void_reason TEXT');
   // existing rows keep role values; ensure no row has an invalid role after adding 'manager'
   // (CHECK is only enforced on new data in ALTER, so existing invalid values are harmless)
 

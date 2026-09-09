@@ -187,8 +187,12 @@ async function modalCreateOrder(opts = {}) {
     agentHtml = `<div class="field"><span>Commission agent (optional)</span><select id="ocAgent"><option value="">— none —</option>${agents.map(a => `<option value="${a.id}">${API.esc(a.name)} (${a.commission_pct}%)</option>`).join('')}</select></div>`;
   }
   const itemsHtml = await loadOrderForm();
+  const deliverHtml = opts.deliverTo
+    ? `<div class="section-label">Delivering to</div><div class="item-line"><span>${opts.deliverTo}</span></div>`
+    : '';
   openModal('New order', `
     ${custHtml}${agentHtml}
+    ${deliverHtml}
     <div class="section-label">Items</div>
     ${itemsHtml}
     <div class="field"><span>Note (optional)</span><input id="ocNotes" placeholder="Delivery note"></div>
@@ -817,30 +821,147 @@ async function viewFinanceDashboard() {
 }
 
 async function viewBookkeeping() {
-  const rows = await API.ledger();
+  const isAdmin = API.user.role === 'admin';
+  const [rows, verify] = await Promise.all([
+    API.ledger(),
+    API.auditVerify().catch(() => null),
+  ]);
+  // running balance is computed oldest → newest; a reversed entry + its reversal
+  // net to zero automatically, so totals stay correct with no special-casing.
+  const asc = rows.slice().reverse();
   let bal = 0, income = 0, expense = 0;
-  const withBal = rows.map(r => {
+  const balById = {};
+  for (const r of asc) {
     bal += r.type === 'income' ? r.amount : -r.amount;
     if (r.type === 'income') income += r.amount; else expense += r.amount;
-    return { ...r, bal };
-  });
+    balById[r.id] = bal;
+  }
+  const integ = verify
+    ? (verify.ok
+      ? `<div class="integ ok">${IC.shield} Ledger integrity verified — ${verify.count} audit record(s), chain intact <button class="btn ghost sm" data-act="nav" data-to="audit">Audit trail →</button></div>`
+      : `<div class="integ bad">${IC.shield} Chain broken at audit record #${verify.broken_at} — the books may have been tampered with. <button class="btn ghost sm" data-act="nav" data-to="audit">Investigate →</button></div>`)
+    : '';
+  const entryRow = (r) => {
+    const reversed = r.status === 'reversed';
+    const isFix = r.status === 'correction';
+    const tag = reversed ? '<span class="chip cancelled">Voided</span>'
+      : isFix ? '<span class="chip approved">Correction</span>' : '';
+    const acts = isAdmin && r.status === 'active'
+      ? `<div class="ledger-acts"><button class="btn ghost sm" data-act="ledger-correct" data-id="${r.id}">Correct</button><button class="btn ghost sm" data-act="ledger-void" data-id="${r.id}">Void</button></div>`
+      : '';
+    return `<tr class="${reversed ? 'row-reversed' : ''}">
+      <td class="cell-main" data-l="Entry">
+        <span style="color:${r.type === 'income' ? 'var(--green-ink)' : 'var(--red-ink)'};font-weight:700">${r.type === 'income' ? '+' : '−'} ${API.fmtMoney(r.amount)}</span>
+        <span class="muted" style="font-weight:600;font-size:11px"> #${r.id}</span> ${tag}
+      </td>
+      ${V.m('Account', `<b>${API.esc(r.account)}</b><div class="muted">${API.esc(r.memo || '')}</div>${r.void_reason ? `<div class="muted" style="color:var(--red-ink)">${API.esc(r.void_reason)}</div>` : ''}`)}
+      ${V.m('Date', `${API.fmtDay(r.at)} · ref ${API.esc(r.ref || '—')}${r.entered_by ? ' · by ' + API.esc(r.entered_by) : ''}`, 'muted')}
+      ${V.m('Balance', API.fmtMoney(balById[r.id] ?? 0), 'tv num')}
+      ${acts ? `<td class="cell-act">${acts}</td>` : ''}
+    </tr>`;
+  };
   return `
   <div class="page-head"><h1>Book keeping</h1><button class="btn sm" data-act="add-expense">+ Expense</button><button class="btn primary sm" data-act="add-income">+ Income</button></div>
-  <p class="muted" style="font-size:12.5px;margin:6px 0 12px">Every money movement in one place — sales, purchases, payroll, commissions and scanned receipts all land here.</p>
+  <p class="muted" style="font-size:12.5px;margin:6px 0 10px">Every money movement in one place — sales, purchases, payroll, commissions and scanned receipts. Entries are <b>append-only</b>: a mistake is fixed with a reversing entry, never edited or deleted${isAdmin ? ' (admin-only)' : ''}.</p>
+  ${integ}
   <div class="grid kpis">
     ${V.kpiCard('Balance', API.fmtMoney(bal), bal >= 0 ? 'account position' : 'in the red', bal >= 0 ? 'good' : 'bad')}
     ${V.kpiCard('Income', API.fmtMoney(income), 'total credit')}
     ${V.kpiCard('Expenses', API.fmtMoney(expense), 'total debit')}
   </div>
   <div class="card" style="margin-top:14px"><div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>Date</th><th>Account</th><th>Memo</th><th>Ref</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
-    <tbody>${withBal.slice(0, 100).map(r => `<tr>
-      <td class="cell-main" data-l="Entry"><span style="color:${r.type === 'income' ? 'var(--green-ink)' : 'var(--red-ink)'};font-weight:700">${r.type === 'income' ? '+' : '−'} ${API.fmtMoney(r.amount)}</span></td>
-      ${V.m('Account', `<b>${API.esc(r.account)}</b><div class="muted">${API.esc(r.memo || '')}</div>`)}
-      ${V.m('Date', `${API.fmtDay(r.at)} · ref ${API.esc(r.ref || '—')}`, 'muted')}
-      ${V.m('Balance', API.fmtMoney(r.bal), 'tv num')}
-    </tr>`).join('') || '<tr><td colspan="7"><div class="empty">No entries yet</div></td></tr>'}
+    <thead><tr><th>Entry</th><th>Account</th><th>Date</th><th class="num">Balance</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
+    <tbody>${rows.slice(0, 150).map(entryRow).join('') || `<tr><td colspan="${isAdmin ? 5 : 4}"><div class="empty">No entries yet</div></td></tr>`}
     </tbody></table></div></div>`;
+}
+
+// ---------- audit trail (hash-chained; admin + manager can view) ----------
+async function viewAudit() {
+  const data = await API.auditLog();
+  const entries = data.entries || [];
+  const v = data.verify || {};
+  const banner = v.ok
+    ? `<div class="integ ok">${IC.shield} Chain intact — ${v.count} record(s) verified. Head hash <code>${API.esc((v.head || '').slice(0, 16))}…</code></div>`
+    : `<div class="integ bad">${IC.shield} Chain BROKEN at record #${v.broken_at}. Everything after that point is unverifiable.</div>`;
+  const actionLabel = {
+    'ledger.create': 'Ledger entry', 'ledger.void': 'Entry voided', 'ledger.correct': 'Entry corrected',
+    'order.pay': 'Order payment', 'commission.settle': 'Commission settled', 'payroll.pay': 'Payroll paid', 'receipt.post': 'Receipt posted',
+  };
+  const diff = (e) => {
+    if (!e.before && !e.after) return '';
+    const b = e.before ? JSON.stringify(e.before) : '—';
+    const a = e.after ? JSON.stringify(e.after) : '—';
+    return `<div class="aud-diff"><span class="muted">was</span> ${API.esc(b.slice(0, 160))} <span class="muted">→</span> ${API.esc(a.slice(0, 160))}</div>`;
+  };
+  return `
+  <div class="page-head"><h1>Audit trail</h1></div>
+  <p class="muted" style="font-size:12.5px;margin:6px 0 10px">Every change to money — who, when, what changed. Each record's fingerprint includes the previous one, so history can't be quietly rewritten.</p>
+  ${banner}
+  <div class="card" style="margin-top:12px"><div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead>
+    <tbody>${entries.map(e => `<tr>
+      <td class="cell-main" data-l="Record">#${e.id} · ${API.fmtDate(e.at)}</td>
+      ${V.m('Who', `${API.esc(e.actor_name || 'system')}${e.actor_role ? ` <span class="chip ${e.actor_role}">${e.actor_role}</span>` : ''}`)}
+      ${V.m('Action', `<b>${actionLabel[e.action] || e.action}</b> <span class="muted">${API.esc(e.entity)}${e.entity_id ? ' #' + e.entity_id : ''}</span>`)}
+      ${V.m('Details', `${API.esc(e.summary || '')}${diff(e)}`, 'muted')}
+    </tr>`).join('') || '<tr><td colspan="4"><div class="empty">No audited changes yet</div></td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+function modalVoidLedger(id) {
+  API.ledger().then(rows => {
+    const r = rows.find(x => x.id === id);
+    if (!r) return toast('Entry not found', 'err');
+    openModal('Void entry #' + r.id, `
+      <p class="muted" style="font-size:13px;margin:0 0 12px;line-height:1.5">This posts a <b>reversing entry</b> that cancels this one out. Nothing is deleted — both stay in the books with an audit record.</p>
+      <div class="item-line"><span>${API.esc(r.account)} · ${API.esc(r.memo || '')}</span><b style="color:${r.type === 'income' ? 'var(--green-ink)' : 'var(--red-ink)'}">${r.type === 'income' ? '+' : '−'} ${API.fmtMoney(r.amount)}</b></div>
+      <label class="muted" style="display:block;margin-top:12px">Reason (required — shown in the audit trail)</label>
+      <textarea id="voidReason" class="input" style="width:100%;min-height:70px" placeholder="e.g. duplicate of receipt #14, wrong amount entered"></textarea>`,
+      `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn danger" id="voidGo">Void entry</button>`);
+    document.getElementById('voidGo').addEventListener('click', async () => {
+      const reason = document.getElementById('voidReason').value.trim();
+      if (reason.length < 3) return toast('Please give a reason', 'warn');
+      try { await API.voidLedger(id, reason); closeModal(); toast('Entry #' + id + ' voided', 'ok'); App.refresh(); }
+      catch (e) { toast(e.message, 'err'); }
+    });
+  });
+}
+
+function modalCorrectLedger(id) {
+  API.ledger().then(rows => {
+    const r = rows.find(x => x.id === id);
+    if (!r) return toast('Entry not found', 'err');
+    openModal('Correct entry #' + r.id, `
+      <p class="muted" style="font-size:13px;margin:0 0 12px;line-height:1.5">The original is reversed and a corrected entry is posted in its place. Both the reversal and the new entry are audited.</p>
+      <label class="muted">Account</label>
+      <input id="corAccount" class="input" style="width:100%;margin-bottom:8px" value="${API.esc(r.account)}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div><label class="muted">Type</label>
+          <select id="corType" class="input" style="width:100%">
+            <option value="expense" ${r.type === 'expense' ? 'selected' : ''}>Expense</option>
+            <option value="income" ${r.type === 'income' ? 'selected' : ''}>Income</option>
+          </select></div>
+        <div><label class="muted">Amount (Rs)</label><input id="corAmount" class="input" type="number" min="1" style="width:100%" value="${r.amount}"></div>
+      </div>
+      <label class="muted">Memo</label>
+      <input id="corMemo" class="input" style="width:100%;margin-bottom:8px" value="${API.esc(r.memo || '')}">
+      <label class="muted">Reason for the correction (required)</label>
+      <textarea id="corReason" class="input" style="width:100%;min-height:60px" placeholder="e.g. amount should have been 4,200 not 42,000"></textarea>`,
+      `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn primary" id="corGo">Post correction</button>`);
+    document.getElementById('corGo').addEventListener('click', async () => {
+      const body = {
+        account: document.getElementById('corAccount').value.trim(),
+        type: document.getElementById('corType').value,
+        amount: +document.getElementById('corAmount').value,
+        memo: document.getElementById('corMemo').value.trim(),
+        reason: document.getElementById('corReason').value.trim(),
+      };
+      if (body.reason.length < 3) return toast('Please give a reason', 'warn');
+      if (!body.account || !(body.amount > 0)) return toast('Account and a positive amount are required', 'warn');
+      try { await API.correctLedger(id, body); closeModal(); toast('Correction posted', 'ok'); App.refresh(); }
+      catch (e) { toast(e.message, 'err'); }
+    });
+  });
 }
 
 // ================= CUSTOMER (storefront) =================
@@ -996,14 +1117,70 @@ function applyCartToDom() {
 async function shopCheckout() {
   if (!shopCart.size) return ppToast('Add some water to your order first', 'warn');
   const u = API.user;
+  // deliveries need somewhere to go — force a saved address + phone first
+  if (!u.customerAddress || !String(u.customerAddress).trim() || !u.customerPhone || !String(u.customerPhone).trim()) {
+    return modalCustomerAddress(() => shopCheckout());
+  }
   await modalCreateOrder({
     customer: { id: u.customer_id, name: u.customerName || u.name },
+    deliverTo: `${API.esc(u.customerAddress)}${u.customerArea ? ' · ' + API.esc(u.customerArea) : ''} · ${API.esc(u.customerPhone)}`,
     onPlaced: () => { shopCart.clear(); document.body.classList.remove('has-cartbar'); },
   });
   document.querySelectorAll('[data-itemqty]').forEach(inp => {
     inp.value = shopCart.get(+inp.dataset.itemqty) || 0;
     inp.dispatchEvent(new Event('input', { bubbles: true }));
   });
+}
+
+// customer's own delivery details — saved to their profile, not per order
+function modalCustomerAddress(after) {
+  const u = API.user;
+  openModal('Delivery details', `
+    <p class="muted" style="font-size:13px;margin:0 0 12px;line-height:1.5">Saved to your profile — we'll use it for every order. You can change it any time from <b>My profile</b>.</p>
+    <label class="muted">Phone number</label>
+    <input id="caPhone" class="input" style="width:100%;margin-bottom:10px" placeholder="03xx-xxxxxxx" value="${API.esc(u.customerPhone || u.phone || '')}">
+    <label class="muted">Delivery address</label>
+    <textarea id="caAddress" class="input" style="width:100%;min-height:70px;margin-bottom:10px" placeholder="House / office, street, sector">${API.esc(u.customerAddress || '')}</textarea>
+    <label class="muted">Area / sector</label>
+    <input id="caArea" class="input" style="width:100%" placeholder="e.g. I-8" value="${API.esc(u.customerArea || '')}">`,
+    `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn primary" id="caSave">Save & continue</button>`);
+  document.getElementById('caSave').addEventListener('click', async () => {
+    const phone = document.getElementById('caPhone').value.trim();
+    const address = document.getElementById('caAddress').value.trim();
+    const area = document.getElementById('caArea').value.trim() || null;
+    if (phone.length < 7) return toast('Enter a valid phone number', 'warn');
+    if (address.length < 6) return toast('Enter your delivery address', 'warn');
+    try {
+      await API.updateCustomer(u.customer_id, { phone, address, area });
+      // refresh the cached user so the checkout guard passes
+      try { const me = await API.me(); API.setAuth(API.token, me); } catch {}
+      closeModal(); toast('Delivery details saved', 'ok');
+      if (typeof after === 'function') after();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+}
+
+async function viewCustomerProfile() {
+  const u = API.user;
+  let me = u;
+  try { me = await API.me(); } catch {}
+  return `
+  <div class="page-head"><h1>My profile</h1></div>
+  <div class="card" style="padding:16px">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
+      <div class="avatar" style="width:46px;height:46px;font-size:18px">${API.esc((me.name[0] || '?').toUpperCase())}</div>
+      <div><div style="font-weight:800">${API.esc(me.name)}</div>
+        <div class="muted" style="font-size:12.5px">${API.esc(me.email || '')}${me.customerName ? ' · ' + API.esc(me.customerName) : ''}</div></div>
+    </div>
+    <label class="muted">Phone number</label>
+    <input id="cpPhone" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(me.customerPhone || me.phone || '')}" placeholder="03xx-xxxxxxx">
+    <label class="muted">Delivery address</label>
+    <textarea id="cpAddress" class="input" style="width:100%;min-height:74px;margin-bottom:10px" placeholder="House / office, street, sector">${API.esc(me.customerAddress || '')}</textarea>
+    <label class="muted">Area / sector</label>
+    <input id="cpArea" class="input" style="width:100%;margin-bottom:14px" value="${API.esc(me.customerArea || '')}" placeholder="e.g. I-8">
+    <button class="btn primary block" data-act="save-my-profile">Save profile</button>
+    <p class="muted" style="font-size:11.5px;margin:10px 0 0">Your pricing tier is set by PurePak. Contact us if it looks wrong.</p>
+  </div>`;
 }
 
 async function onShopClick(e) {
@@ -1373,52 +1550,92 @@ async function modalReviewReceiptSafe(id) {
   } catch (e) { ppToast(e.message, 'bad'); }
 }
 
-// save the scanned receipt (upload) — from the capture modal
+// Scan flow: upload -> wait for AI -> show what it read for the scanner to
+// confirm/correct -> save to staging (a reviewer still approves it later).
 async function saveScannedReceipt() {
   const fileEl = document.getElementById('rxFile');
   const f = fileEl.files[0];
   if (!f) { ppToast('Choose a receipt photo first', 'warn'); return; }
   const btn = document.getElementById('rxSave');
   if (btn) btn.disabled = true;
-  document.getElementById('rxBusy').classList.remove('hidden');
+  const busy = document.getElementById('rxBusy');
+  if (busy) { busy.textContent = 'Uploading…'; busy.classList.remove('hidden'); }
+  const kind = document.getElementById('rxKind').value;
+  const manual = {
+    kind,
+    amount: document.getElementById('rxAmount').value || null,
+    vendor: document.getElementById('rxVendor').value || null,
+    memo: document.getElementById('rxMemo').value || null,
+  };
+  let rec;
   try {
     const { dataUrl, mimetype } = await fileToDataUrl(f);
-    const r = await API.uploadReceipt({
-      image: dataUrl,
-      mimetype,
-      filename: f.name,
-      kind: document.getElementById('rxKind').value,
-      amount: document.getElementById('rxAmount').value || null,
-      vendor: document.getElementById('rxVendor').value || null,
-      memo: document.getElementById('rxMemo').value || null,
-    });
-    closeModal();
-    receiptModalOpen = false;
-    ppToast('Receipt saved', 'ok');
-    App.refresh();
-    // poll until OCR finishes (max ~60s), then refresh again
-    let tries = 0;
-    const t = setInterval(async () => {
-      tries++;
-      try {
-        const rows = await API.receipts(null, 'pending');
-        const rec = rows.find(x => x.id === r.id);
-        if (!rec || (rec && rec.ocr_status !== 'pending') || tries > 20) {
-          clearInterval(t);
-          App.refresh();
-          if (rec && rec.ocr_status === 'done') {
-            ppToast('Receipt details read — ' + (rec.extracted.vendor || 'saved to staging'), 'ok');
-          } else if (rec && rec.ocr_status === 'failed') {
-            ppToast('Saved — check the details and verify it', 'warn');
-          }
-        }
-      } catch { clearInterval(t); }
-    }, 3000);
+    rec = await API.uploadReceipt({ image: dataUrl, mimetype, filename: f.name, ...manual });
   } catch (e) {
-    document.getElementById('rxBusy').classList.add('hidden');
-    ppToast('Could not save receipt: ' + e.message, 'err');
+    if (busy) busy.classList.add('hidden');
+    ppToast('Could not upload receipt: ' + e.message, 'err');
     if (btn) btn.disabled = false;
+    return;
   }
+  if (busy) busy.textContent = 'Reading the receipt with AI…';
+  // poll for OCR (max ~50s)
+  for (let tries = 0; tries < 17; tries++) {
+    await new Promise(r => setTimeout(r, 3000));
+    let rows;
+    try { rows = await API.receipts(null, 'pending'); } catch { continue; }
+    const r = rows.find(x => x.id === rec.id);
+    if (r && r.ocr_status !== 'pending') { rec = r; break; }
+    if (tries === 16) { rec.ocr_status = rec.ocr_status || 'failed'; }
+  }
+  receiptModalOpen = false;
+  App.refresh();               // it's in staging now regardless
+  modalConfirmScan(rec, kind); // let the scanner check the AI read
+}
+
+// editable "here's what the AI read" step, shown right after a scan
+function modalConfirmScan(rec, kind) {
+  const ex = rec.extracted || {};
+  const items = ex.type === 'purepak' ? (ex.items || []) : (ex.line_items || []);
+  const conf = ex.confidence != null ? Math.round(ex.confidence * 100) + '% confident' : '';
+  const read = rec.ocr_status === 'done';
+  const kinds = SCAN_KINDS[API.user.role] || SCAN_KINDS.agent;
+  openModal(read ? 'Check what we read' : 'AI could not read this', `
+    <div class="scan-note ${read ? 'ok' : 'warn'}">
+      ${read
+        ? `The AI read the receipt${conf ? ' (' + conf + ')' : ''}. Fix anything that's wrong, then save it to staging.`
+        : `The photo couldn't be read automatically. Fill in the details below.`}
+    </div>
+    <label class="muted">Type</label>
+    <select id="csKind" class="input" style="width:100%;margin-bottom:10px">
+      ${kinds.map(([v, l]) => `<option value="${v}" ${v === (rec.kind || kind) ? 'selected' : ''}>${l}</option>`).join('')}
+    </select>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <div><label class="muted">Total amount (PKR)</label><input id="csAmount" type="number" class="input" style="width:100%" value="${rec.amount != null ? rec.amount : ''}"></div>
+      <div><label class="muted">Date on receipt</label><input id="csDate" class="input" style="width:100%" value="${API.esc(ex.date || '')}" placeholder="YYYY-MM-DD"></div>
+    </div>
+    <label class="muted">Vendor / paid to</label>
+    <input id="csVendor" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(rec.vendor || '')}">
+    <label class="muted">Note</label>
+    <input id="csMemo" class="input" style="width:100%;margin-bottom:${items.length ? '10px' : '4px'}" value="${API.esc(rec.memo || '')}">
+    ${items.length ? `<div class="section-label">Line items the AI saw</div>
+      <div class="scan-items">${items.map(it => `<div class="item-line"><span>${API.esc(String(it.item || it.size || 'item'))}${it.qty != null ? ' × ' + it.qty : ''}</span><b>${it.amount != null ? API.fmtMoney(it.amount) : (it.price != null ? API.fmtMoney(it.price) : (it.rate != null ? API.fmtMoney(it.rate) : '—'))}</b></div>`).join('')}</div>
+      <p class="muted" style="font-size:11px;margin-top:6px">Line-item corrections can be made by the reviewer.</p>` : ''}
+  `, `<button class="btn ghost" data-close-modal>Later</button><button class="btn primary" id="csSave">Save to staging</button>`);
+  document.getElementById('csSave').addEventListener('click', async () => {
+    const body = {
+      kind: document.getElementById('csKind').value,
+      amount: document.getElementById('csAmount').value || null,
+      date: document.getElementById('csDate').value.trim() || null,
+      vendor: document.getElementById('csVendor').value.trim() || null,
+      memo: document.getElementById('csMemo').value.trim() || null,
+    };
+    try {
+      await API.updateReceipt(rec.id, body);
+      closeModal();
+      ppToast('Saved to staging — a reviewer will approve it', 'ok');
+      App.refresh();
+    } catch (e) { ppToast(e.message, 'err'); }
+  });
 }
 
 // ---- team / staff management ----
@@ -1829,6 +2046,7 @@ const ADMIN_NAV = [
   { to: 'agents', icon: IC.badge, label: 'Agents' },
   { to: 'commissions', icon: IC.cash, label: 'Commissions' },
   { to: 'bookkeeping', icon: IC.book, label: 'Book keeping' },
+  { to: 'audit', icon: IC.clip, label: 'Audit trail' },
   { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
   { to: 'team', icon: IC.shield, label: 'Team' },
   { to: 'payroll', icon: IC.wallet, label: 'Payroll' },
@@ -1864,6 +2082,7 @@ function navFor(role) {
     customer: [
       { to: 'home', icon: IC.drop, label: 'Shop' },
       { to: 'orders', icon: IC.box, label: 'My orders' },
+      { to: 'profile', icon: IC.users, label: 'My profile' },
     ],
   };
   return N[role] || [];
@@ -1875,7 +2094,7 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, receipts: viewReceipts,
+    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },
@@ -1883,7 +2102,7 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, receipts: viewReceipts,
+    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },
@@ -1891,5 +2110,5 @@ const VIEW = {
   agent: { dashboard: viewAgentDashboard, orders: viewOrders, commissions: viewCommissions, receipts: viewReceipts },
   delivery: { route: viewSmartRoute, deliveries: viewDeliveries, receipts: viewReceipts },
   employee: { profile: viewProfile, orders: viewOrders },
-  customer: { home: viewCustomerHome, orders: viewOrders },
+  customer: { home: viewCustomerHome, orders: viewOrders, profile: viewCustomerProfile },
 };

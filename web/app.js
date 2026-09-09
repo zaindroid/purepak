@@ -264,7 +264,7 @@ const App = {
         window.refreshStorefrontPrices().catch(() => {});
       }
     };
-    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer'].forEach(ev =>
+    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer', 'commission'].forEach(ev =>
       es.addEventListener(ev, () => onEvent(ev)));
     es.addEventListener('message', () => onEvent('message'));
     es.addEventListener('error', () => { /* EventSource auto-reconnects; no-op */ });
@@ -324,20 +324,26 @@ const App = {
     document.getElementById('bellPop')?.remove();
     const ref = (it && it.ref) || '';
     const valid = navFor(API.user.role).map(n => n.to);
+    const goto = (...prefs) => { location.hash = '#/' + (prefs.find(p => valid.includes(p)) || valid[0] || 'dashboard'); };
     let m;
     if ((m = /^receipt#(\d+)$/.exec(ref))) {
-      location.hash = '#/receipts';
-      setTimeout(() => { try { modalReviewReceiptSafe(+m[1]); } catch {} }, 500);
+      goto('receipts');
+      const rid = +m[1];
+      setTimeout(() => { try { Promise.resolve(modalReviewReceiptSafe(rid)).catch(() => {}); } catch {} }, 500);
     } else if ((m = /^order#(\d+)$/.exec(ref))) {
-      const to = valid.includes('orders') ? 'orders' : (valid.includes('deliveries') ? 'deliveries' : (valid.includes('route') ? 'route' : valid[0]));
-      location.hash = '#/' + to;
-      if (to === 'orders') setTimeout(() => { try { modalOrderDetail(+m[1]); } catch {} }, 500);
-    } else if (/^user#\d+$/.test(ref)) {
-      location.hash = valid.includes('team') ? '#/team' : '#/' + valid[0];
-    } else if (/^(product|pricing)#/.test(ref)) {
-      location.hash = valid.includes('products') ? '#/products' : '#/' + valid[0];
+      goto('orders', 'deliveries', 'route', 'home');
+      const oid = +m[1];
+      if (valid.includes('orders')) setTimeout(() => { try { Promise.resolve(modalOrderDetail(oid)).catch(() => {}); } catch {} }, 500);
+    } else if (/^(comm|commission)#/.test(ref)) {
+      goto('commissions', 'dashboard');            // agent → "My commission"
+    } else if (/^agent#/.test(ref)) {
+      goto('agents', 'commissions');
     } else if (/^payroll/.test(ref)) {
-      location.hash = valid.includes('payroll') ? '#/payroll' : '#/' + valid[0];
+      goto('payroll', 'profile', 'dashboard');
+    } else if (/^user#\d+$/.test(ref)) {
+      goto('team', 'profile');
+    } else if (/^(product|pricing)#/.test(ref)) {
+      goto('products', 'bookkeeping', 'home');
     }
     this.bellUpdate(true).catch(() => {});
   },

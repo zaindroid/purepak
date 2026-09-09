@@ -807,7 +807,7 @@ async function handleApi(req, res, url) {
     }
     if (n) {
       notify(staffUserIds().filter(x => x !== user.id), 'pricing', 'Price list updated',
-        n + ' price override(s) updated by ' + user.name + '. Applies to new orders.');
+        n + ' price override(s) updated by ' + user.name + '. Applies to new orders.', 'product#0');
       // every signed-in account (customers see their own type's prices, agents/
       // staff see the matrix) gets the refreshed price list in realtime
       sseBroadcast('pricing');
@@ -919,14 +919,19 @@ async function handleApi(req, res, url) {
       if (b.status === 'cancelled') {
         db.prepare(`UPDATE deliveries SET status='failed' WHERE order_id=? AND status IN ('pending','out_for_delivery')`).run(oid);
       }
-      // Notify the customer, the delivery team, and staff
+      // Notify the customer, the assigned agent, the delivery team, and staff
       {
         const cust = db.prepare('SELECT c.*, u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
+        const titles = { confirmed: 'Order confirmed', in_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Order cancelled' };
         if (cust && cust.uid) {
-          const titles = { confirmed: 'Order confirmed', in_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Order cancelled' };
           const bodies = { confirmed: `Order #${oid} has been confirmed.`, in_delivery: `Order #${oid} is out for delivery.`, delivered: `Order #${oid} has been delivered.`, cancelled: `Order #${oid} was cancelled.` };
           const t = titles[b.status];
           if (t) notify([cust.uid], 'order', t, bodies[b.status], `order#${oid}`);
+        }
+        // the agent who booked the order
+        if (cur.agent_id && titles[b.status]) {
+          const ag = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(cur.agent_id);
+          if (ag && ag.id !== user.id) notify([ag.id], 'order', `Order #${oid} — ${titles[b.status].toLowerCase()}`, `${cust ? cust.name : 'Customer'}`, `order#${oid}`);
         }
         if (b.status === 'confirmed' || b.status === 'in_delivery') {
           const drivers = db.prepare(`SELECT id FROM users WHERE role='delivery' AND status='active'`).all().map(r => r.id).filter(x => x !== user.id);
@@ -934,7 +939,7 @@ async function handleApi(req, res, url) {
             b.status === 'confirmed' ? `New delivery to schedule · Order #${oid}` : `Order #${oid} — out for delivery`,
             `${cust ? cust.name : 'Customer'}${cust && cust.area ? ' · ' + cust.area : ''}`, `order#${oid}`);
         }
-        if (!['admin', 'manager', 'finance'].includes(user.role)) notify(staffUserIds().filter(x => x !== user.id), 'order', `Order #${oid} -> ${b.status}`, null, `order#${oid}`);
+        if (!['admin', 'manager', 'finance'].includes(user.role)) notify(staffUserIds().filter(x => x !== user.id), 'order', `Order #${oid} → ${titles[b.status] || b.status}`, null, `order#${oid}`);
       }
     }
     if (b.paid !== undefined) {
@@ -949,6 +954,14 @@ async function handleApi(req, res, url) {
       if (inc > 0) postLedger(user, { account: 'Cash / Bank', type: 'income', amount: inc, ref: 'order#' + oid, memo: 'Water sale · ' + via + (b.memo ? ' · ' + b.memo : '') });
       else if (inc < 0) postLedger(user, { account: 'Cash / Bank', type: 'expense', amount: -inc, ref: 'order#' + oid, memo: 'Payment refund · ' + via });
       if (inc !== 0) audit(user, 'order.pay', 'order', oid, `Payment on order #${oid}: paid ${cur.paid} → ${paid} of ${cur.total} (${payLabel(method)})`, { paid: cur.paid }, { paid, method });
+      // tell the customer their payment landed
+      if (inc > 0) {
+        const cu = db.prepare('SELECT u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
+        if (cu && cu.uid) notify([cu.uid], 'order',
+          payStatus === 'paid' ? `Payment received · Order #${oid}` : `Part payment received · Order #${oid}`,
+          `Rs ${Math.round(inc)} received ${via}. ${payStatus === 'paid' ? 'Your order is fully paid.' : 'Rs ' + Math.round(cur.total - paid) + ' still due.'}`,
+          `order#${oid}`);
+      }
     }
     // the customer is notified in the block above; refresh the office + agents only
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
@@ -1033,17 +1046,26 @@ async function handleApi(req, res, url) {
       db.prepare(`UPDATE orders SET status='confirmed' WHERE id=? AND status IN ('confirmed','in_delivery')`).run(cur.order_id);
     if (next === 'pending')
       db.prepare(`UPDATE orders SET status='confirmed' WHERE id=? AND status='in_delivery'`).run(cur.order_id);
-    // notify the customer of the delivery outcome
-    if (next === 'delivered' || next === 'failed') {
-      const cust = db.prepare(`SELECT c.id, u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=(SELECT customer_id FROM orders WHERE id=?)`).get(cur.order_id);
-      if (cust && cust.uid) {
-        notify([cust.uid], 'order', next === 'delivered' ? 'Delivered' : 'Delivery could not be completed',
-          next === 'delivered' ? `Your water order has been delivered.` : `Your water delivery was not completed. Our team will follow up.`,
-          `order#${cur.order_id}`);
+    // keep customer + agent + office informed of the delivery move
+    if (['out_for_delivery', 'delivered', 'failed'].includes(next)) {
+      const ord = db.prepare('SELECT customer_id, agent_id FROM orders WHERE id=?').get(cur.order_id);
+      const custU = db.prepare(`SELECT u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?`).get(ord.customer_id);
+      const T = { out_for_delivery: 'Out for delivery', delivered: 'Delivered', failed: 'Delivery could not be completed' };
+      const B = {
+        out_for_delivery: `Your water order #${cur.order_id} is on the way.`,
+        delivered: `Your water order #${cur.order_id} has been delivered.`,
+        failed: `Delivery of order #${cur.order_id} was not completed. Our team will follow up.`,
+      };
+      if (custU && custU.uid) notify([custU.uid], 'order', T[next], B[next], `order#${cur.order_id}`);
+      if (ord.agent_id) {
+        const ag = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(ord.agent_id);
+        if (ag && ag.id !== user.id) notify([ag.id], 'order', `Order #${cur.order_id} — ${T[next].toLowerCase()}`, null, `order#${cur.order_id}`);
       }
-      notify(staffUserIds().filter(x => x !== user.id), 'order',
-        next === 'delivered' ? `Order #${cur.order_id} delivered` : `Order #${cur.order_id} delivery failed`,
-        null, `order#${cur.order_id}`);
+      if (next === 'delivered' || next === 'failed') {
+        notify(staffUserIds().filter(x => x !== user.id), 'order',
+          next === 'delivered' ? `Order #${cur.order_id} delivered` : `Order #${cur.order_id} delivery failed`,
+          null, `order#${cur.order_id}`);
+      }
     }
     // customer notified above on delivered/failed; refresh the office + agents only
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
@@ -1122,6 +1144,10 @@ async function handleApi(req, res, url) {
     const agentName = db.prepare('SELECT name FROM agents WHERE id=?').get(cur.agent_id)?.name || '';
     postLedger(user, { account: 'Agent commissions', type: 'expense', amount: cur.amount, ref: 'comm#' + cid, memo: 'Commission payout - ' + agentName });
     audit(user, 'commission.settle', 'commission', cid, `Settled commission #${cid} (Rs ${cur.amount}) for ${agentName}`, { status: 'accrued' }, { status: 'paid' });
+    // tell the agent their commission was paid
+    const agU = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(cur.agent_id);
+    if (agU && agU.id !== user.id) notify([agU.id], 'commission', 'Commission paid',
+      `Rs ${Math.round(cur.amount)} commission (order #${cur.order_id}) has been paid out.`, `comm#${cid}`);
     return json(res, 200, db.prepare('SELECT * FROM commissions WHERE id=?').get(cid));
   }
 
@@ -1180,7 +1206,7 @@ async function handleApi(req, res, url) {
       created++;
     }
     if (created) notify(staffUserIds().filter(x => x !== user.id), 'payroll', 'Payroll generated',
-      period + ' payroll created for ' + created + ' employee(s) by ' + user.name + '.');
+      period + ' payroll created for ' + created + ' employee(s) by ' + user.name + '.', 'payroll#' + period);
     return json(res, 200, { period, created });
   }
   if (method === 'POST' && parts[1] === 'payroll' && parts.length === 4 && parts[3] === 'mark-paid') {
@@ -1200,6 +1226,10 @@ async function handleApi(req, res, url) {
       memo: (isAgent ? 'Commission payout - ' : 'Salary payout - ') + (u ? u.name : 'employee'),
     });
     audit(user, 'payroll.pay', 'payroll', id, `Paid ${entry.period} payroll (Rs ${entry.amount}) to ${u ? u.name : 'employee'}`, { status: 'accrued' }, { status: 'paid' });
+    // tell the employee their salary was paid
+    if (entry.user_id !== user.id) notify([entry.user_id], 'payroll',
+      (isAgent ? 'Commission' : 'Salary') + ' paid · ' + entry.period,
+      `Rs ${Math.round(entry.amount)} for ${entry.period} has been paid.`, 'payroll#' + entry.period);
     if (isAgent && u.agent_id) {
       // Settle the underlying accrued commissions so they don't double-count in Commissions.
       db.prepare(`UPDATE commissions SET status='paid', paid_at=datetime('now')

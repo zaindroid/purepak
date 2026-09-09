@@ -98,11 +98,18 @@ async function api(token, method, p, body) {
   const dNotif = (await api(driver, 'GET', '/notifications')).body.notifications;
   check('the delivery team got a notification', dNotif.some(n => n.kind === 'order' && new RegExp('#' + oid).test(n.title || '')));
 
-  // dispatch reuses that same delivery (no duplicate)
-  const disp = await api(admin, 'PATCH', '/orders/' + oid, { status: 'in_delivery', driver: 'Waqas' });
-  check('dispatch moves it to out_for_delivery', disp.status === 200);
+  // driver starts the trip -> order should move to in_delivery on its own
+  const del = (await api(driver, 'GET', '/deliveries')).body.find(d => d.order_id === oid);
+  await api(driver, 'PATCH', '/deliveries/' + del.id, { status: 'out_for_delivery' });
+  let ord = (await api(admin, 'GET', '/orders/' + oid)).body;
+  check('driver starting the trip flips the order to in_delivery', ord.status === 'in_delivery', 'status=' + ord.status);
   const forThisOrder = (await api(driver, 'GET', '/deliveries')).body.filter(d => d.order_id === oid);
   check('no duplicate delivery row was created', forThisOrder.length === 1 && forThisOrder[0].status === 'out_for_delivery', 'rows=' + forThisOrder.length);
+
+  // driver marks delivered -> order becomes delivered (the reported bug)
+  await api(driver, 'PATCH', '/deliveries/' + del.id, { status: 'delivered' });
+  ord = (await api(admin, 'GET', '/orders/' + oid)).body;
+  check('marking the delivery delivered updates the order to delivered', ord.status === 'delivered', 'status=' + ord.status);
 
   // ---------- 4. customer must have a delivery address ----------
   // make a fresh customer login with a blank-address customer record

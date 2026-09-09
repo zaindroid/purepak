@@ -73,7 +73,6 @@ function staffUserIds() {
 // ---------- payment methods (Pakistan) ----------
 const PAY_METHODS = [
   { id: 'cod', label: 'Cash on delivery', needs_account: false },
-  { id: 'cash', label: 'Cash (in person)', needs_account: false },
   { id: 'bank', label: 'Bank transfer', needs_account: true },
   { id: 'jazzcash', label: 'JazzCash', needs_account: true },
   { id: 'easypaisa', label: 'Easypaisa', needs_account: true },
@@ -1025,9 +1024,15 @@ async function handleApi(req, res, url) {
       return err(res, 400, `Cannot move delivery ${cur.status} -> ${next}`);
     db.prepare('UPDATE deliveries SET status=?, delivered_at=CASE WHEN ?=? THEN datetime(\'now\') ELSE delivered_at END, notes=? WHERE id=?')
       .run(next, next, 'delivered', b.notes || cur.notes, did);
-    // keep order status in sync
-    if (next === 'delivered') db.prepare(`UPDATE orders SET status='delivered' WHERE id=? AND status='in_delivery'`).run(cur.order_id);
-    if (next === 'failed') db.prepare(`UPDATE orders SET status='confirmed' WHERE id=? AND status='in_delivery'`).run(cur.order_id);
+    // keep the ORDER status in lockstep with the delivery
+    if (next === 'out_for_delivery')
+      db.prepare(`UPDATE orders SET status='in_delivery' WHERE id=? AND status IN ('new','confirmed')`).run(cur.order_id);
+    if (next === 'delivered')
+      db.prepare(`UPDATE orders SET status='delivered' WHERE id=? AND status IN ('new','confirmed','in_delivery')`).run(cur.order_id);
+    if (next === 'failed')
+      db.prepare(`UPDATE orders SET status='confirmed' WHERE id=? AND status IN ('confirmed','in_delivery')`).run(cur.order_id);
+    if (next === 'pending')
+      db.prepare(`UPDATE orders SET status='confirmed' WHERE id=? AND status='in_delivery'`).run(cur.order_id);
     // notify the customer of the delivery outcome
     if (next === 'delivered' || next === 'failed') {
       const cust = db.prepare(`SELECT c.id, u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=(SELECT customer_id FROM orders WHERE id=?)`).get(cur.order_id);

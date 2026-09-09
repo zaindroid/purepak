@@ -70,8 +70,9 @@ function fileToDataUrl(file, maxW = 1400) {
 // source of truth for which are enabled + the business's account numbers
 // (GET /api/payment-methods); this is just for display before that loads.
 const PAY_LABEL = {
-  cod: 'Cash on delivery', cash: 'Cash', bank: 'Bank transfer', jazzcash: 'JazzCash',
+  cod: 'Cash on delivery', bank: 'Bank transfer', jazzcash: 'JazzCash',
   easypaisa: 'Easypaisa', nayapay: 'NayaPay', sadapay: 'SadaPay', raast: 'Raast',
+  cash: 'Cash', // legacy fallback only
 };
 
 const V = {
@@ -221,7 +222,6 @@ async function modalCreateOrder(opts = {}) {
     const m = methodEl.value;
     const a = payAccounts[m];
     if (m === 'cod') { hintEl.textContent = 'Pay the rider in cash when your order arrives.'; hintEl.className = 'pay-hint'; return; }
-    if (m === 'cash') { hintEl.textContent = 'Cash handed over in person.'; hintEl.className = 'pay-hint'; return; }
     if (a) {
       hintEl.innerHTML = `Send <b>${totalEl.textContent}</b> to <b>${API.esc(a.name || PAY_LABEL[m])}</b> — <span class="pay-num">${API.esc(a.detail || '')}</span>. Your order is confirmed once we receive it.`;
       hintEl.className = 'pay-hint active';
@@ -296,7 +296,8 @@ async function modalOrderDetail(id) {
 
 async function modalPayOrder(id, due) {
   const [o, pay] = await Promise.all([API.order(id), API.paymentMethods().catch(() => ({ methods: [] }))]);
-  const methods = (pay.methods || []).length ? pay.methods : Object.keys(PAY_LABEL).map(k => ({ id: k, label: PAY_LABEL[k] }));
+  const methods = (pay.methods || []).length ? pay.methods
+    : ['cod', 'bank', 'jazzcash', 'easypaisa', 'nayapay', 'sadapay', 'raast'].map(k => ({ id: k, label: PAY_LABEL[k] }));
   openModal('Record payment · #' + o.id, `
     <div class="field"><span>Customer</span><input value="${API.esc(o.customer_name)}" disabled></div>
     <div class="row2">
@@ -1203,18 +1204,15 @@ function modalCustomerAddress(after) {
     <label class="muted">Phone number</label>
     <input id="caPhone" class="input" style="width:100%;margin-bottom:10px" placeholder="03xx-xxxxxxx" value="${API.esc(u.customerPhone || u.phone || '')}">
     <label class="muted">Delivery address</label>
-    <textarea id="caAddress" class="input" style="width:100%;min-height:70px;margin-bottom:10px" placeholder="House / office, street, sector">${API.esc(u.customerAddress || '')}</textarea>
-    <label class="muted">Area / sector</label>
-    <input id="caArea" class="input" style="width:100%" placeholder="e.g. I-8" value="${API.esc(u.customerArea || '')}">`,
+    <textarea id="caAddress" class="input" style="width:100%;min-height:80px" placeholder="House / office, street, sector, city">${API.esc(u.customerAddress || '')}</textarea>`,
     `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn primary" id="caSave">Save & continue</button>`);
   document.getElementById('caSave').addEventListener('click', async () => {
     const phone = document.getElementById('caPhone').value.trim();
     const address = document.getElementById('caAddress').value.trim();
-    const area = document.getElementById('caArea').value.trim() || null;
     if (phone.length < 7) return toast('Enter a valid phone number', 'warn');
     if (address.length < 6) return toast('Enter your delivery address', 'warn');
     try {
-      await API.updateCustomer(u.customer_id, { phone, address, area });
+      await API.updateCustomer(u.customer_id, { phone, address });
       // refresh the cached user so the checkout guard passes
       try { const me = await API.me(); API.setAuth(API.token, me); } catch {}
       closeModal(); toast('Delivery details saved', 'ok');
@@ -1238,9 +1236,7 @@ async function viewCustomerProfile() {
     <label class="muted">Phone number</label>
     <input id="cpPhone" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(me.customerPhone || me.phone || '')}" placeholder="03xx-xxxxxxx">
     <label class="muted">Delivery address</label>
-    <textarea id="cpAddress" class="input" style="width:100%;min-height:74px;margin-bottom:10px" placeholder="House / office, street, sector">${API.esc(me.customerAddress || '')}</textarea>
-    <label class="muted">Area / sector</label>
-    <input id="cpArea" class="input" style="width:100%;margin-bottom:14px" value="${API.esc(me.customerArea || '')}" placeholder="e.g. I-8">
+    <textarea id="cpAddress" class="input" style="width:100%;min-height:84px;margin-bottom:14px" placeholder="House / office, street, sector, city">${API.esc(me.customerAddress || '')}</textarea>
     <button class="btn primary block" data-act="save-my-profile">Save profile</button>
     <p class="muted" style="font-size:11.5px;margin:10px 0 0">Your pricing tier is set by PurePak. Contact us if it looks wrong.</p>
   </div>`;

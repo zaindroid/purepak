@@ -321,15 +321,23 @@ const App = {
   async bellOpen(id) {
     try { await API.markNotificationsRead(id); } catch {}
     const it = (this._bellItems || []).find(x => x.id === id);
-    if (it) {
-      document.getElementById('bellPop')?.remove();
-      const m = /^receipt#(\d+)$/.exec(it.ref || '');
-      if (m) {
-        location.hash = '#/receipts';
-        setTimeout(() => modalReviewReceiptSafe(+m[1]), 600);
-      } else {
-        location.hash = '#/receipts';
-      }
+    document.getElementById('bellPop')?.remove();
+    const ref = (it && it.ref) || '';
+    const valid = navFor(API.user.role).map(n => n.to);
+    let m;
+    if ((m = /^receipt#(\d+)$/.exec(ref))) {
+      location.hash = '#/receipts';
+      setTimeout(() => { try { modalReviewReceiptSafe(+m[1]); } catch {} }, 500);
+    } else if ((m = /^order#(\d+)$/.exec(ref))) {
+      const to = valid.includes('orders') ? 'orders' : (valid.includes('deliveries') ? 'deliveries' : (valid.includes('route') ? 'route' : valid[0]));
+      location.hash = '#/' + to;
+      if (to === 'orders') setTimeout(() => { try { modalOrderDetail(+m[1]); } catch {} }, 500);
+    } else if (/^user#\d+$/.test(ref)) {
+      location.hash = valid.includes('team') ? '#/team' : '#/' + valid[0];
+    } else if (/^(product|pricing)#/.test(ref)) {
+      location.hash = valid.includes('products') ? '#/products' : '#/' + valid[0];
+    } else if (/^payroll/.test(ref)) {
+      location.hash = valid.includes('payroll') ? '#/payroll' : '#/' + valid[0];
     }
     this.bellUpdate(true).catch(() => {});
   },
@@ -570,10 +578,9 @@ const App = {
       case 'save-my-profile': stop(); {
         const phone = document.getElementById('cpPhone').value.trim();
         const address = document.getElementById('cpAddress').value.trim();
-        const area = document.getElementById('cpArea').value.trim() || null;
         if (phone.length < 7) { this.toast('Enter a valid phone number', 'warn'); break; }
         try {
-          await API.updateCustomer(API.user.customer_id, { phone, address, area });
+          await API.updateCustomer(API.user.customer_id, { phone, address });
           const me = await API.me(); API.setAuth(API.token, me);
           this.toast('Profile saved', 'ok'); this.refresh();
         } catch (e) { this.toast(e.message, 'bad'); }

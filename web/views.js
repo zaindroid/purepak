@@ -66,11 +66,20 @@ function fileToDataUrl(file, maxW = 1400) {
 }
 
 // ---- shared bits ----
+// payment methods used in Pakistan — labels for chips/menus. The server is the
+// source of truth for which are enabled + the business's account numbers
+// (GET /api/payment-methods); this is just for display before that loads.
+const PAY_LABEL = {
+  cod: 'Cash on delivery', cash: 'Cash', bank: 'Bank transfer', jazzcash: 'JazzCash',
+  easypaisa: 'Easypaisa', nayapay: 'NayaPay', sadapay: 'SadaPay', raast: 'Raast',
+};
+
 const V = {
   kpiCard(label, val, sub, cls = '') {
     return `<div class="card kpi ${cls}"><div class="k-label">${label}</div><div class="k-val">${val}</div>${sub ? `<div class="k-sub">${sub}</div>` : ''}</div>`;
   },
   chip(status) { return `<span class="chip ${status}">${API.statusLabel(status)}</span>`; },
+  payChip(method) { return `<span class="chip pay-${method || 'cod'}">${PAY_LABEL[method] || PAY_LABEL.cod}</span>`; },
   // mobile card row: <td data-l="Label">value</td> — label appears above value on phones, ignored on desktop
   m(label, val, cls = '') { return `<td class="${cls}" data-l="${label}">${val}</td>`; },
   orderStatusFlow(o) {
@@ -187,6 +196,10 @@ async function modalCreateOrder(opts = {}) {
     agentHtml = `<div class="field"><span>Commission agent (optional)</span><select id="ocAgent"><option value="">— none —</option>${agents.map(a => `<option value="${a.id}">${API.esc(a.name)} (${a.commission_pct}%)</option>`).join('')}</select></div>`;
   }
   const itemsHtml = await loadOrderForm();
+  const pay = await API.paymentMethods().catch(() => ({ methods: [], accounts: {} }));
+  const payAccounts = pay.accounts || {};
+  // COD + cash always; an online method only if the business has an account for it
+  const payChoices = (pay.methods || []).filter(m => !m.needs_account || payAccounts[m.id]);
   const deliverHtml = opts.deliverTo
     ? `<div class="section-label">Delivering to</div><div class="item-line"><span>${opts.deliverTo}</span></div>`
     : '';
@@ -195,10 +208,26 @@ async function modalCreateOrder(opts = {}) {
     ${deliverHtml}
     <div class="section-label">Items</div>
     ${itemsHtml}
+    <div class="field"><span>Payment method</span>
+      <select id="ocMethod">${payChoices.map(m => `<option value="${m.id}">${m.label}</option>`).join('')}</select></div>
+    <div id="ocPayHint" class="pay-hint"></div>
     <div class="field"><span>Note (optional)</span><input id="ocNotes" placeholder="Delivery note"></div>
     <div id="ocTotal" class="money-lg" style="text-align:right"></div>`,
     `<button class="btn" data-close-modal>Cancel</button><button class="btn primary" id="ocSubmit">Place order</button>`);
   const totalEl = document.getElementById('ocTotal');
+  const methodEl = document.getElementById('ocMethod');
+  const hintEl = document.getElementById('ocPayHint');
+  function payHint() {
+    const m = methodEl.value;
+    const a = payAccounts[m];
+    if (m === 'cod') { hintEl.textContent = 'Pay the rider in cash when your order arrives.'; hintEl.className = 'pay-hint'; return; }
+    if (m === 'cash') { hintEl.textContent = 'Cash handed over in person.'; hintEl.className = 'pay-hint'; return; }
+    if (a) {
+      hintEl.innerHTML = `Send <b>${totalEl.textContent}</b> to <b>${API.esc(a.name || PAY_LABEL[m])}</b> — <span class="pay-num">${API.esc(a.detail || '')}</span>. Your order is confirmed once we receive it.`;
+      hintEl.className = 'pay-hint active';
+    } else { hintEl.textContent = ''; hintEl.className = 'pay-hint'; }
+  }
+  methodEl.addEventListener('change', payHint);
   function recalc() {
     let t = 0;
     document.querySelectorAll('[data-itemqty]').forEach(inp => {
@@ -208,10 +237,11 @@ async function modalCreateOrder(opts = {}) {
     });
     totalEl.textContent = API.fmtMoney(t);
   }
-  document.querySelectorAll('[data-itemqty]').forEach(i => i.addEventListener('input', recalc));
+  document.querySelectorAll('[data-itemqty]').forEach(i => i.addEventListener('input', () => { recalc(); payHint(); }));
   recalc();
+  payHint();
   document.getElementById('ocSubmit').addEventListener('click', async () => {
-    const body = { notes: document.getElementById('ocNotes').value.trim() || undefined };
+    const body = { notes: document.getElementById('ocNotes').value.trim() || undefined, payment_method: methodEl.value };
     body.items = [];
     document.querySelectorAll('[data-itemqty]').forEach(inp => {
       const q = parseInt(inp.value) || 0;
@@ -253,6 +283,7 @@ async function modalOrderDetail(id) {
     </div>
     <div class="progress"><i style="width:${payPct}%"></i></div>
     <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-3)"><span>Paid ${API.fmtMoney(o.paid)} of ${API.fmtMoney(o.total)}</span><span>${API.fmtDay(o.placed_at)}</span></div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:8px">${V.chip(o.payment_status)} ${V.payChip(o.payment_method)}</div>
     <div class="section-label">Items</div>
     ${o.items.map(i => `<div class="item-line"><span>${API.esc(i.product_name)} × ${i.qty}</span><b>${API.fmtMoney(i.line_total)}</b></div>`).join('')}
     ${o.agent_name ? `<div class="section-label">Agent</div><div class="item-line"><span>${API.esc(o.agent_name)}</span></div>` : ''}
@@ -264,21 +295,28 @@ async function modalOrderDetail(id) {
 }
 
 async function modalPayOrder(id, due) {
-  const o = await API.order(id);
+  const [o, pay] = await Promise.all([API.order(id), API.paymentMethods().catch(() => ({ methods: [] }))]);
+  const methods = (pay.methods || []).length ? pay.methods : Object.keys(PAY_LABEL).map(k => ({ id: k, label: PAY_LABEL[k] }));
   openModal('Record payment · #' + o.id, `
     <div class="field"><span>Customer</span><input value="${API.esc(o.customer_name)}" disabled></div>
     <div class="row2">
       <div class="field"><span>Amount due</span><input value="${API.fmtMoney(due)}" disabled></div>
       <div class="field"><span>Amount received (Rs)</span><input id="payAmt" type="number" min="0" max="${due}" value="${due}"></div>
     </div>
-    <div class="field"><span>Memo</span><input id="payMemo" placeholder="Cash / bank / reference"></div>`,
+    <div class="field"><span>Received via</span>
+      <select id="payMethod">${methods.map(m => `<option value="${m.id}" ${m.id === o.payment_method ? 'selected' : ''}>${m.label}</option>`).join('')}</select></div>
+    <div class="field"><span>Reference (optional)</span><input id="payMemo" placeholder="Txn ID / cheque no. / note"></div>`,
     `<button class="btn" data-close-modal>Cancel</button><button class="btn primary" id="paySubmit">Save</button>`);
   document.getElementById('paySubmit').addEventListener('click', async () => {
     const amt = parseInt(document.getElementById('payAmt').value) || 0;
     if (amt <= 0) return toast('Enter a valid amount', 'bad');
     try {
       const cur = await API.order(id);
-      await API.updateOrder(id, { paid: cur.paid + Math.min(amt, cur.total - cur.paid), memo: document.getElementById('payMemo').value.trim() });
+      await API.updateOrder(id, {
+        paid: cur.paid + Math.min(amt, cur.total - cur.paid),
+        method: document.getElementById('payMethod').value,
+        memo: document.getElementById('payMemo').value.trim(),
+      });
       closeModal(); toast('Payment recorded', 'ok'); App.refresh();
     } catch (e) { toast(e.message, 'bad'); }
   });
@@ -399,7 +437,7 @@ async function viewOrders({ status = '' } = {}) {
         </div>
         <div class="ord-items">${API.esc(o.items || '—')}</div>
         <div class="ord-bot">
-          <span class="ord-date">${API.fmtDay(o.placed_at)}</span>
+          <span class="ord-date">${API.fmtDay(o.placed_at)} &middot; ${PAY_LABEL[o.payment_method] || PAY_LABEL.cod}</span>
           <span class="ord-total">${API.fmtMoney(o.total)}</span>
         </div>
         ${bal > 0 && o.status !== 'cancelled'
@@ -424,7 +462,7 @@ async function viewOrders({ status = '' } = {}) {
         ${V.m('Items', API.esc(o.items || '—'), 'muted')}
         ${API.user.role !== 'customer' ? V.m('Agent', o.agent_name ? API.esc(o.agent_name) : '<span class="muted">—</span>', 'muted') : ''}
         ${V.m('Total', API.fmtMoney(o.total), 'tv num')}
-        ${V.m('Payment', V.chip(o.payment_status), 'tv')}
+        ${V.m('Payment', `${V.chip(o.payment_status)} ${V.payChip(o.payment_method)}`, 'tv')}
         ${V.m('Status', V.chip(o.status), 'tv')}
       </tr>`).join('') || `<tr><td colspan="8"><div class="empty"><div class="em-ico">${IC.box}</div>No orders found</div></td></tr>`}
     </tbody></table></div></div>`;
@@ -873,6 +911,31 @@ async function viewBookkeeping() {
     <thead><tr><th>Entry</th><th>Account</th><th>Date</th><th class="num">Balance</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
     <tbody>${rows.slice(0, 150).map(entryRow).join('') || `<tr><td colspan="${isAdmin ? 5 : 4}"><div class="empty">No entries yet</div></td></tr>`}
     </tbody></table></div></div>`;
+}
+
+// ---------- payment methods: the business's receiving accounts (admin/manager) ----------
+async function viewPayments() {
+  const canEdit = ['admin', 'manager'].includes(API.user.role);
+  const { methods, accounts } = await API.paymentMethods();
+  const online = methods.filter(m => m.needs_account);
+  const row = (m) => {
+    const a = accounts[m.id] || {};
+    return `<div class="pay-acct">
+      <div class="pay-acct-h"><b>${m.label}</b>${a.detail ? '<span class="chip approved">Enabled</span>' : '<span class="chip cancelled">Not set</span>'}</div>
+      <div class="row2">
+        <div class="field"><span>Account title</span><input data-pay-name="${m.id}" value="${API.esc(a.name || '')}" placeholder="e.g. PurePak" ${canEdit ? '' : 'disabled'}></div>
+        <div class="field"><span>${m.id === 'bank' ? 'IBAN / account no.' : 'Number'}</span><input data-pay-detail="${m.id}" value="${API.esc(a.detail || '')}" placeholder="${m.id === 'bank' ? 'PK.. or account #' : '03xx-xxxxxxx'}" ${canEdit ? '' : 'disabled'}></div>
+      </div>
+    </div>`;
+  };
+  return `
+  <div class="page-head"><h1>Payment methods</h1></div>
+  <p class="muted" style="font-size:12.5px;margin:6px 0 12px">Cash on delivery is always offered. Fill an account below to also offer that method at checkout — the customer sees these details to pay, and staff confirm the payment on the order.</p>
+  <div class="card card-pad">
+    ${online.map(row).join('')}
+    ${canEdit ? `<button class="btn primary block" data-act="save-pay-accounts" style="margin-top:6px">Save payment accounts</button>` : ''}
+  </div>
+  <p class="muted" style="font-size:11.5px;margin-top:10px">Online gateway integration (Safepay / PayFast — auto-confirm) can be added later; the checkout is already built to slot it in.</p>`;
 }
 
 // ---------- audit trail (hash-chained; admin + manager can view) ----------
@@ -2047,6 +2110,7 @@ const ADMIN_NAV = [
   { to: 'commissions', icon: IC.cash, label: 'Commissions' },
   { to: 'bookkeeping', icon: IC.book, label: 'Book keeping' },
   { to: 'audit', icon: IC.clip, label: 'Audit trail' },
+  { to: 'payments', icon: IC.wallet, label: 'Payment methods' },
   { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
   { to: 'team', icon: IC.shield, label: 'Team' },
   { to: 'payroll', icon: IC.wallet, label: 'Payroll' },
@@ -2094,7 +2158,7 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, receipts: viewReceipts,
+    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },
@@ -2102,7 +2166,7 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, receipts: viewReceipts,
+    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },

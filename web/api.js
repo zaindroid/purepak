@@ -71,6 +71,8 @@ const API = (() => {
     order: (id) => g('/orders/' + id),
     createOrder: (b) => post('/orders', b),
     updateOrder: (id, b) => patch('/orders/' + id, b),
+    paymentMethods: () => g('/payment-methods'),
+    savePaymentAccounts: (accounts) => post('/payment-methods', { accounts }),
     deliveries: (status) => g('/deliveries' + (status ? '?status=' + status : '')),
     delivery: (id) => g('/deliveries/' + id),
     updateDelivery: (id, b) => patch('/deliveries/' + id, b),

@@ -732,3 +732,15 @@ body.has-cartbar .wa-fab{bottom:calc(80px + env(safe-area-inset-bottom))}
 .scan-items{border:1px solid var(--line-2);border-radius:10px;padding:4px 10px}
 .scan-items .item-line{border-bottom:1px dashed var(--line)}
 .scan-items .item-line:last-child{border-bottom:none}
+
+/* ===== payment methods ===== */
+.pay-hint{font-size:12px;color:var(--ink-3);margin:-4px 0 8px;line-height:1.5}
+.pay-hint.active{color:var(--ink-2);background:var(--blue-50);border:1px solid #cfe3f7;border-radius:9px;padding:8px 10px;margin-top:2px}
+.pay-num{font-weight:700;color:var(--blue-800);white-space:nowrap}
+.chip.pay-cod,.chip.pay-cash{background:var(--slate-bg);color:var(--slate-ink)}
+.chip.pay-bank,.chip.pay-raast{background:var(--blue-50);color:var(--blue-800)}
+.chip.pay-jazzcash{background:#fdeaea;color:#b3261e}
+.chip.pay-easypaisa{background:var(--green-bg);color:var(--green-ink)}
+.chip.pay-nayapay,.chip.pay-sadapay{background:#efeafe;color:#5b3ec8}
+.pay-acct{border:1px solid var(--line-2);border-radius:12px;padding:12px;margin-bottom:10px}
+.pay-acct-h{display:flex;align-items:center;gap:8px;font-size:13.5px;margin-bottom:8px}

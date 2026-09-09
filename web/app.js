@@ -558,6 +558,15 @@ const App = {
       case 'add-income': stop(); modalAddLedger('income'); break;
       case 'ledger-void': stop(); modalVoidLedger(+id); break;
       case 'ledger-correct': stop(); modalCorrectLedger(+id); break;
+      case 'save-pay-accounts': stop(); {
+        const accounts = {};
+        document.querySelectorAll('[data-pay-name]').forEach(el => {
+          const m = el.dataset.payName;
+          accounts[m] = { name: el.value.trim(), detail: (document.querySelector(`[data-pay-detail="${m}"]`) || {}).value?.trim() || '' };
+        });
+        try { await API.savePaymentAccounts(accounts); this.toast('Payment accounts saved', 'ok'); this.refresh(); }
+        catch (e) { this.toast(e.message, 'bad'); }
+      } break;
       case 'save-my-profile': stop(); {
         const phone = document.getElementById('cpPhone').value.trim();
         const address = document.getElementById('cpAddress').value.trim();

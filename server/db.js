@@ -135,6 +135,7 @@ function migrate(db) {
     paid REAL NOT NULL DEFAULT 0,
     payment_status TEXT NOT NULL DEFAULT 'unpaid'
       CHECK(payment_status IN ('unpaid','partial','paid')),
+    payment_method TEXT NOT NULL DEFAULT 'cod',  -- cod | cash | bank | jazzcash | easypaisa | nayapay | sadapay | raast
     notes TEXT,
     placed_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -239,6 +240,9 @@ function migrate(db) {
   if (!ucols.includes('salary')) db.exec('ALTER TABLE users ADD COLUMN salary REAL');
   if (!ucols.includes('status')) db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled'))`);
   if (!ucols.includes('last_login_at')) db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+
+  const ocols = db.prepare(`PRAGMA table_info(orders)`).all().map(c => c.name);
+  if (!ocols.includes('payment_method')) db.exec(`ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cod'`);
 
   // ledger: append-only + audit-trail columns (added for the tamper-evident books)
   const lcols = db.prepare(`PRAGMA table_info(ledger)`).all().map(c => c.name);

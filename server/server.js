@@ -70,6 +70,23 @@ function staffUserIds() {
   return db.prepare(`SELECT id FROM users WHERE role IN ('admin','manager','finance') AND status='active'`).all().map(r => r.id);
 }
 
+// ---------- payment methods (Pakistan) ----------
+const PAY_METHODS = [
+  { id: 'cod', label: 'Cash on delivery', needs_account: false },
+  { id: 'cash', label: 'Cash (in person)', needs_account: false },
+  { id: 'bank', label: 'Bank transfer', needs_account: true },
+  { id: 'jazzcash', label: 'JazzCash', needs_account: true },
+  { id: 'easypaisa', label: 'Easypaisa', needs_account: true },
+  { id: 'nayapay', label: 'NayaPay', needs_account: true },
+  { id: 'sadapay', label: 'SadaPay', needs_account: true },
+  { id: 'raast', label: 'Raast', needs_account: true },
+];
+const PAY_METHOD_IDS = new Set(PAY_METHODS.map(m => m.id));
+const payLabel = (id) => (PAY_METHODS.find(m => m.id === id) || {}).label || id || 'Cash on delivery';
+function paymentAccounts() {
+  try { return JSON.parse(setting('payment_accounts') || '{}') || {}; } catch { return {}; }
+}
+
 // ---------- tamper-evident books: hash-chained audit trail + append-only ledger ----------
 function nowStamp() { return new Date().toISOString().slice(0, 19).replace('T', ' '); }
 // exact string the hash is computed over — MUST match auditVerify() byte for byte
@@ -843,8 +860,9 @@ async function handleApi(req, res, url) {
     let agentId = b.agent_id || null;
     if (user.role === 'agent') agentId = user.agent_id;
     if (user.role === 'customer' && agentId) agentId = b.agent_id; // admin/agent pick; customer optional
-    const r = db.prepare('INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,notes) VALUES (?,?,?,?,?,?,?)')
-      .run(custId, agentId, 'new', total, 0, 'unpaid', b.notes || null);
+    const method = PAY_METHOD_IDS.has(b.payment_method) ? b.payment_method : 'cod';
+    const r = db.prepare('INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,payment_method,notes) VALUES (?,?,?,?,?,?,?,?)')
+      .run(custId, agentId, 'new', total, 0, 'unpaid', method, b.notes || null);
     const orderId = r.lastInsertRowid;
     const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
     for (const row of prepared) insOI.run(orderId, ...row);
@@ -924,16 +942,41 @@ async function handleApi(req, res, url) {
       requireRole(user, ['admin', 'manager', 'finance']);
       const paid = Math.min(cur.total, Math.max(0, Number(b.paid)));
       const payStatus = paid >= cur.total ? 'paid' : (paid > 0 ? 'partial' : 'unpaid');
-      db.prepare('UPDATE orders SET paid=?, payment_status=? WHERE id=?').run(paid, payStatus, oid);
+      const method = PAY_METHOD_IDS.has(b.method) ? b.method : cur.payment_method;
+      db.prepare('UPDATE orders SET paid=?, payment_status=?, payment_method=? WHERE id=?').run(paid, payStatus, method, oid);
       // ledger income for the new amount received
       const inc = paid - cur.paid;
-      if (inc > 0) postLedger(user, { account: 'Cash / Bank', type: 'income', amount: inc, ref: 'order#' + oid, memo: 'Water sale - ' + (b.memo || 'customer payment') });
-      else if (inc < 0) postLedger(user, { account: 'Cash / Bank', type: 'expense', amount: -inc, ref: 'order#' + oid, memo: 'Payment refund' });
-      if (inc !== 0) audit(user, 'order.pay', 'order', oid, `Payment on order #${oid}: paid ${cur.paid} → ${paid} of ${cur.total}`, { paid: cur.paid }, { paid });
+      const via = 'via ' + payLabel(method);
+      if (inc > 0) postLedger(user, { account: 'Cash / Bank', type: 'income', amount: inc, ref: 'order#' + oid, memo: 'Water sale · ' + via + (b.memo ? ' · ' + b.memo : '') });
+      else if (inc < 0) postLedger(user, { account: 'Cash / Bank', type: 'expense', amount: -inc, ref: 'order#' + oid, memo: 'Payment refund · ' + via });
+      if (inc !== 0) audit(user, 'order.pay', 'order', oid, `Payment on order #${oid}: paid ${cur.paid} → ${paid} of ${cur.total} (${payLabel(method)})`, { paid: cur.paid }, { paid, method });
     }
     // the customer is notified in the block above; refresh the office + agents only
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
     return json(res, 200, db.prepare(Q.orders + ' WHERE o.id=?').get(oid));
+  }
+
+  // ---- payment methods + the business's receiving accounts ----
+  if (method === 'GET' && parts[1] === 'payment-methods') {
+    requireRole(user, ['admin', 'manager', 'finance', 'agent', 'customer']);
+    return json(res, 200, { methods: PAY_METHODS, accounts: paymentAccounts() });
+  }
+  if (method === 'POST' && parts[1] === 'payment-methods') {
+    requireRole(user, ['admin', 'manager']);
+    const b = await readBody(req);
+    const src = (b && typeof b === 'object' && b.accounts) ? b.accounts : b;
+    const clean = {};
+    for (const m of PAY_METHODS) {
+      if (!m.needs_account) continue;
+      const a = src && src[m.id];
+      if (a && (String(a.name || '').trim() || String(a.detail || '').trim())) {
+        clean[m.id] = { name: String(a.name || '').trim().slice(0, 80), detail: String(a.detail || '').trim().slice(0, 120) };
+      }
+    }
+    db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES ('payment_accounts',?,datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`).run(JSON.stringify(clean));
+    audit(user, 'settings.payment_accounts', 'settings', null, 'Updated the business payment accounts', null, { methods: Object.keys(clean) });
+    return json(res, 200, { methods: PAY_METHODS, accounts: clean });
   }
 
   // ---- deliveries ----

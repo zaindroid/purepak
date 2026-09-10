@@ -271,12 +271,12 @@ async function modalOrderDetail(id) {
   const role = API.user.role;
   const payPct = o.total ? Math.round((o.paid / o.total) * 100) : 0;
   let actions = '';
-  if (role === 'admin' || role === 'agent') {
+  if (['admin', 'manager', 'shop_manager', 'agent'].includes(role)) {
     if (o.status === 'new') actions += `<button class="btn primary" data-act="dispatch" data-id="${o.id}" data-status="confirmed">Confirm order</button>`;
     if (o.status === 'confirmed') actions += `<button class="btn primary" data-act="dispatch" data-id="${o.id}" data-status="in_delivery">Dispatch for delivery</button>`;
     if (['new', 'confirmed', 'in_delivery'].includes(o.status)) actions += `<button class="btn danger" data-act="cancel-order" data-id="${o.id}">Cancel</button>`;
   }
-  if ((role === 'admin' || role === 'finance') && o.payment_status !== 'paid') {
+  if (['admin', 'manager', 'shop_manager', 'finance'].includes(role) && o.payment_status !== 'paid') {
     actions += `<button class="btn" data-act="pay-order" data-id="${o.id}" data-due="${o.total - o.paid}">Record payment</button>`;
   }
   openModal('Order #' + o.id, `
@@ -323,6 +323,40 @@ async function modalPayOrder(id, due) {
         memo: document.getElementById('payMemo').value.trim(),
       });
       closeModal(); toast('Payment recorded', 'ok'); App.refresh();
+    } catch (e) { toast(e.message, 'bad'); }
+  });
+}
+
+// Marking a delivery "delivered" — if the order still has money outstanding,
+// let the driver record what was actually collected at the door in the same
+// step, so a COD order doesn't sit "unpaid" until someone fixes it later.
+async function modalMarkDelivered(deliveryId, due, method) {
+  if (!(due > 0)) {
+    if (await confirmDialog({ title: 'Mark delivered', message: 'This delivery will be marked as completed.', okLabel: 'Mark delivered' })) {
+      try { await API.updateDelivery(deliveryId, { status: 'delivered' }); toast('Delivered — nice work', 'ok'); App.refresh(); }
+      catch (e) { toast(e.message, 'bad'); }
+    }
+    return;
+  }
+  const pay = await API.paymentMethods().catch(() => ({ methods: [] }));
+  const methods = (pay.methods || []).length ? pay.methods
+    : ['cod', 'bank', 'jazzcash', 'easypaisa', 'nayapay', 'sadapay', 'raast'].map(k => ({ id: k, label: PAY_LABEL[k] }));
+  openModal('Mark delivered', `
+    <p class="muted" style="font-size:13px;margin:0 0 10px">Rs ${Math.round(due)} is still due on this order. Record what was collected at the door — leave it at 0 if the customer will pay later.</p>
+    <div class="row2">
+      <div class="field"><span>Amount due</span><input value="${API.fmtMoney(due)}" disabled></div>
+      <div class="field"><span>Collected now (Rs)</span><input id="dlvCollected" type="number" min="0" max="${due}" value="${due}"></div>
+    </div>
+    <div class="field"><span>Received via</span>
+      <select id="dlvMethod">${methods.map(m => `<option value="${m.id}" ${m.id === (method || 'cod') ? 'selected' : ''}>${m.label}</option>`).join('')}</select></div>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn primary" id="dlvSubmit">Mark delivered</button>`);
+  document.getElementById('dlvSubmit').addEventListener('click', async () => {
+    const collected = Math.max(0, Math.min(due, Number(document.getElementById('dlvCollected').value) || 0));
+    try {
+      await API.updateDelivery(deliveryId, { status: 'delivered', collected, method: document.getElementById('dlvMethod').value });
+      closeModal();
+      toast(collected > 0 ? `Delivered — Rs ${Math.round(collected)} collected` : 'Delivered — nice work', 'ok');
+      App.refresh();
     } catch (e) { toast(e.message, 'bad'); }
   });
 }
@@ -425,7 +459,7 @@ async function viewAdminDashboard() {
 }
 
 async function viewOrders({ status = '' } = {}) {
-  const roles = ['admin', 'agent', 'customer', 'finance', 'employee'];
+  const roles = ['admin', 'manager', 'shop_manager', 'agent', 'customer', 'finance', 'employee'];
   if (!roles.includes(API.user.role)) return '';
   const orders = await API.orders(status);
 
@@ -464,7 +498,7 @@ async function viewOrders({ status = '' } = {}) {
   }
 
   const filters = ['all', 'new', 'confirmed', 'in_delivery', 'delivered', 'cancelled'];
-  const canOrder = ['admin', 'agent'].includes(API.user.role);
+  const canOrder = ['admin', 'shop_manager', 'agent'].includes(API.user.role);
   return `
   <div class="page-head"><h1>Orders</h1>
     ${canOrder ? `<button class="btn primary sm" data-act="new-order">+ New order</button>` : ''}</div>
@@ -497,7 +531,7 @@ async function viewDeliveries({ status = '' } = {}) {
       const due = Math.round((x.order_total - x.order_paid) * 100) / 100;
       let act = '';
       if (x.status === 'pending') act = `<button class="btn sm primary" data-act="del-ofd" data-id="${x.id}">Start trip</button>`;
-      if (x.status === 'out_for_delivery') act = `<button class="btn sm primary" data-act="del-done" data-id="${x.id}">Delivered</button>`;
+      if (x.status === 'out_for_delivery') act = `<button class="btn sm primary" data-act="del-done" data-id="${x.id}" data-due="${due}" data-method="${x.order_payment_method || 'cod'}">Delivered</button>`;
       if (x.status === 'failed') act = `<button class="btn sm" data-act="del-retry" data-id="${x.id}">Retry</button>`;
       return `<tr>
       <td class="cell-main" data-l="Delivery">#${x.id} <span class="muted" style="font-weight:600;font-size:12px">· order #${x.order_id}</span></td>
@@ -592,7 +626,7 @@ function smartStopCard(s, idx, compact) {
   const kind = s.status === 'out_for_delivery' ? 'out_for_delivery' : 'pending';
   let act = kind === 'pending'
     ? `<button class="btn primary block sm" data-act="del-ofd" data-id="${s.delivery_id}">Start trip</button>`
-    : `<button class="btn primary block sm" data-act="del-done" data-id="${s.delivery_id}">Mark delivered</button>`;
+    : `<button class="btn primary block sm" data-act="del-done" data-id="${s.delivery_id}" data-due="${due}" data-method="${s.order_payment_method || 'cod'}">Mark delivered</button>`;
   const head = idx === 0
     ? `<div class="stop-ribbon">NEXT STOP</div>`
     : '';
@@ -744,7 +778,7 @@ async function viewProfile() {
     <div style="display:flex;gap:14px;align-items:center">
       <div class="avatar" style="width:52px;height:52px;font-size:20px">${API.esc((me.name[0] || '?').toUpperCase())}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:16px;font-weight:800">${API.esc(me.name)} <span class="chip ${me.role}">${me.role}</span></div>
+        <div style="font-size:16px;font-weight:800">${API.esc(me.name)} <span class="chip ${me.role}">${API.roleLabel(me.role)}</span></div>
         <div class="muted" style="font-size:12.5px;margin-top:3px">${API.esc(me.email || '—')}${me.phone ? ' · ' + API.esc(me.phone) : ''}</div>
       </div>
     </div>
@@ -1002,7 +1036,7 @@ async function viewAudit() {
     <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead>
     <tbody>${entries.map(e => `<tr>
       <td class="cell-main" data-l="Record">#${e.id} · ${API.fmtDate(e.at)}</td>
-      ${V.m('Who', `${API.esc(e.actor_name || 'system')}${e.actor_role ? ` <span class="chip ${e.actor_role}">${e.actor_role}</span>` : ''}`)}
+      ${V.m('Who', `${API.esc(e.actor_name || 'system')}${e.actor_role ? ` <span class="chip ${e.actor_role}">${API.roleLabel(e.actor_role)}</span>` : ''}`)}
       ${V.m('Action', `<b>${actionLabel[e.action] || e.action}</b> <span class="muted">${API.esc(e.entity)}${e.entity_id ? ' #' + e.entity_id : ''}</span>`)}
       ${V.m('Details', `${API.esc(e.summary || '')}${diff(e)}`, 'muted')}
     </tr>`).join('') || '<tr><td colspan="4"><div class="empty">No audited changes yet</div></td></tr>'}
@@ -1762,7 +1796,7 @@ async function viewTeam() {
   const pending = rows.filter(r => r.status === 'pending');
   const active = rows.filter(r => r.status === 'active');
   const monthly = active.reduce((a, r) => a + (Number(r.salary) || 0), 0);
-  const roleChip = (r) => `<span class="chip ${r.role}">${r.role === 'employee' ? 'employee' : r.role}</span>`;
+  const roleChip = (r) => `<span class="chip ${r.role}">${API.roleLabel(r.role)}</span>`;
   const statusChip = (r) => r.status === 'pending'
     ? '<span class="chip pending">Pending</span>'
     : (r.status === 'disabled' ? '<span class="chip cancelled">Disabled</span>' : '<span class="chip approved">Active</span>');
@@ -1815,7 +1849,8 @@ function modalAddEmployee() {
   const u = API.user;
   const isRoot = u.role === 'admin';
   const roles = [
-    ['employee', 'Employee (office / general staff)'], ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'],
+    ['employee', 'Employee (office / general staff)'], ['shop_manager', 'Shop manager (orders & deliveries only)'],
+    ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'],
     ...(isRoot ? [['manager', 'Manager'], ['admin', 'Admin']] : []),
   ];
   openModal('Add employee', `
@@ -1872,6 +1907,7 @@ function modalEditEmployee(id) {
     const r = rows.find(x => x.id === id);
     if (!r) return;
     const roles = [
+      ['employee', 'Employee'], ['shop_manager', 'Shop manager (orders & deliveries only)'],
       ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'], ['customer', 'Customer'],
       ...(isRoot ? [['manager', 'Manager'], ['admin', 'Admin']] : []),
     ].filter(([k]) => !(k === 'admin' || k === 'manager') || isRoot);
@@ -1942,7 +1978,7 @@ async function viewPayroll() {
     return `<div class="pay-row">
       <div class="team-av">${API.esc((r.name[0] || '?').toUpperCase())}</div>
       <div class="pm">
-        <div class="nm">${API.esc(r.name)} <span class="chip ${r.role}" style="margin-left:4px">${r.role}</span></div>
+        <div class="nm">${API.esc(r.name)} <span class="chip ${r.role}" style="margin-left:4px">${API.roleLabel(r.role)}</span></div>
         <div class="sub">${sub}${paid ? ' · paid ' + API.fmtDay(r.entry.paid_at) : ''}</div>
       </div>
       <div class="pay-amt">${API.fmtMoney(r.due)}</div>
@@ -2148,24 +2184,32 @@ function modalEditProduct(id) {
 // ---- nav definitions ----
 const ADMIN_NAV = [
   { to: 'dashboard', icon: IC.chart, label: 'Dashboard' },
-  { to: 'orders', icon: IC.box, label: 'Orders' },
+  { to: 'orders', icon: IC.box, label: 'Orders', section: 'Operations' },
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
   { to: 'route', icon: IC.route, label: 'Route map' },
-  { to: 'customers', icon: IC.users, label: 'Customers' },
+  { to: 'customers', icon: IC.users, label: 'Customers', section: 'Sales' },
   { to: 'agents', icon: IC.badge, label: 'Agents' },
   { to: 'commissions', icon: IC.cash, label: 'Commissions' },
-  { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping' },
-  { to: 'audit', icon: IC.clip, label: 'Audit trail' },
-  { to: 'payments', icon: IC.wallet, label: 'Payment methods' },
+  { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping', section: 'Finance' },
   { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
-  { to: 'team', icon: IC.shield, label: 'Team' },
+  { to: 'payments', icon: IC.wallet, label: 'Payment methods' },
   { to: 'payroll', icon: IC.wallet, label: 'Payroll' },
-  { to: 'products', icon: IC.bottle, label: 'Products' },
+  { to: 'audit', icon: IC.clip, label: 'Audit trail' },
+  { to: 'products', icon: IC.bottle, label: 'Products', section: 'Catalog & team' },
+  { to: 'team', icon: IC.shield, label: 'Team' },
+];
+// Shop manager: a single-purpose profile that only runs the order pipeline —
+// order received -> confirmed -> dispatched -> delivered. No money, catalog,
+// team, or reporting views; those stay with admin/manager/finance.
+const SHOP_MANAGER_NAV = [
+  { to: 'orders', icon: IC.box, label: 'Orders' },
+  { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
 ];
 function navFor(role) {
   const N = {
     admin: ADMIN_NAV,
     manager: ADMIN_NAV,
+    shop_manager: SHOP_MANAGER_NAV,
     finance: [
       { to: 'dashboard', icon: IC.chart, label: 'Finance' },
       { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping' },
@@ -2219,6 +2263,7 @@ const VIEW = {
   finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, commissions: viewCommissions, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents },
   agent: { dashboard: viewAgentDashboard, orders: viewOrders, commissions: viewCommissions, receipts: viewReceipts },
   delivery: { route: viewSmartRoute, deliveries: viewDeliveries, receipts: viewReceipts },
+  shop_manager: { orders: viewOrders, deliveries: viewDeliveries },
   employee: { profile: viewProfile, orders: viewOrders },
   customer: { home: viewCustomerHome, orders: viewOrders, profile: viewCustomerProfile },
 };

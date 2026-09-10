@@ -61,7 +61,7 @@ function migrate(db) {
     email TEXT NOT NULL UNIQUE,
     phone TEXT,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','finance','delivery','employee','agent','customer')),
+    role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer')),
     agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
     customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
     salary REAL,
@@ -240,6 +240,35 @@ function migrate(db) {
   if (!ucols.includes('salary')) db.exec('ALTER TABLE users ADD COLUMN salary REAL');
   if (!ucols.includes('status')) db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled'))`);
   if (!ucols.includes('last_login_at')) db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+
+  // allow the new 'shop_manager' role — SQLite can't ALTER a column's CHECK
+  // constraint in place, so rebuild the table once, preserving every row/id.
+  const usersDef = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).get();
+  if (usersDef && usersDef.sql && !usersDef.sql.includes('shop_manager')) {
+    db.exec('PRAGMA foreign_keys = OFF;');
+    db.exec(`
+      CREATE TABLE users_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        phone TEXT,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer')),
+        agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        salary REAL,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled')),
+        active INTEGER NOT NULL DEFAULT 1,
+        last_login_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO users_new (id,name,email,phone,password_hash,role,agent_id,customer_id,salary,status,active,last_login_at,created_at)
+        SELECT id,name,email,phone,password_hash,role,agent_id,customer_id,salary,status,active,last_login_at,created_at FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+    `);
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
 
   const ocols = db.prepare(`PRAGMA table_info(orders)`).all().map(c => c.name);
   if (!ocols.includes('payment_method')) db.exec(`ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cod'`);

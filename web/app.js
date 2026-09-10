@@ -201,17 +201,20 @@ const App = {
     document.getElementById('login').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     document.getElementById('sideName').textContent = user.name;
-    document.getElementById('sideRole').textContent = user.role;
+    document.getElementById('sideRole').textContent = API.roleLabel(user.role);
     document.getElementById('sideAvatar').textContent = (user.name[0] || '?').toUpperCase();
     // build nav
     const nav = navFor(user.role);
-    document.getElementById('nav').innerHTML = nav.map(n =>
-      `<a href="#/${n.to}" data-nav="${n.to}"><span class="ni">${n.icon}</span>${n.label}</a>`).join('');
+    document.getElementById('nav').innerHTML = nav.map((n, i) => {
+      const divider = n.section && n.section !== (nav[i - 1] && nav[i - 1].section)
+        ? `<div class="nav-section">${n.section}</div>` : '';
+      return `${divider}<a href="#/${n.to}" data-nav="${n.to}"><span class="ni">${n.icon}</span>${n.label}</a>`;
+    }).join('');
     document.querySelectorAll('#nav a').forEach(a => a.addEventListener('click', () => {
       document.getElementById('sidebar').classList.remove('open');
     }));
-    this.route = user.role === 'customer' ? 'home' : 'dashboard';
     const def = nav[0].to;
+    this.route = def;
     if (!location.hash || location.hash === '#/') location.hash = '#/' + def;
     this.render();
     this.bellStart();
@@ -415,7 +418,7 @@ const App = {
   },
 
   async act(ds, ev) {
-    const { act, id, status, to, product, name, due } = ds;
+    const { act, id, status, to, product, name, due, method } = ds;
     const role = API.user.role;
     const stop = () => ev && ev.stopPropagation();
     switch (act) {
@@ -453,10 +456,7 @@ const App = {
         catch (e) { this.toast(e.message, 'bad'); }
         break;
       case 'del-done': stop();
-        if (await confirmDialog({ title: 'Mark delivered', message: 'This delivery will be marked as completed.', okLabel: 'Mark delivered' })) {
-          try { await API.updateDelivery(+id, { status: 'delivered' }); this.toast('Delivered — nice work'); this.refresh(); }
-          catch (e) { this.toast(e.message, 'bad'); }
-        }
+        modalMarkDelivered(+id, +due || 0, method);
         break;
       case 'del-retry': stop();
         try { await API.updateDelivery(+id, { status: 'pending' }); this.toast('Back in queue'); this.refresh(); }

@@ -39,6 +39,7 @@ const API = (() => {
   const fmtDay = (s) => { if (!s) return '—'; const d = new Date(String(s).replace(' ', 'T')); return isNaN(d) ? s : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }); };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const statusLabel = (s) => ({ new: 'New', confirmed: 'Confirmed', in_delivery: 'In delivery', delivered: 'Delivered', cancelled: 'Cancelled', pending: 'Pending', out_for_delivery: 'Out for delivery', failed: 'Failed', accrued: 'Accrued', paid: 'Paid', unpaid: 'Unpaid', partial: 'Partial' }[s] || s);
+  const roleLabel = (r) => ({ admin: 'Admin', manager: 'Manager', shop_manager: 'Shop manager', finance: 'Finance', delivery: 'Delivery', employee: 'Employee', agent: 'Agent', customer: 'Customer' }[r] || r);
 
   return {
     get token() { return token; }, get user() { return user; },
@@ -115,6 +116,6 @@ const API = (() => {
     kpis: () => g('/kpis'),
     monthly: () => g('/analytics/monthly'),
     topCustomers: () => g('/analytics/top-customers'),
-    fmtMoney, fmtDate, fmtDay, esc, statusLabel,
+    fmtMoney, fmtDate, fmtDay, esc, statusLabel, roleLabel,
   };
 })();

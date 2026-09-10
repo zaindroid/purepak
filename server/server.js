@@ -69,6 +69,12 @@ function notify(userIds, kind, title, body, ref) {
 function staffUserIds() {
   return db.prepare(`SELECT id FROM users WHERE role IN ('admin','manager','finance') AND status='active'`).all().map(r => r.id);
 }
+// order/delivery-only notifications also reach the shop manager — a role scoped
+// entirely to running orders through the pipeline, so it shouldn't see pricing,
+// payroll, receipts or team-management noise that staffUserIds() carries.
+function orderStaffUserIds() {
+  return db.prepare(`SELECT id FROM users WHERE role IN ('admin','manager','shop_manager','finance') AND status='active'`).all().map(r => r.id);
+}
 
 // ---------- payment methods (Pakistan) ----------
 const PAY_METHODS = [
@@ -135,6 +141,30 @@ function postLedger(actor, e) {
     `${e.type === 'income' ? '+' : '−'} Rs ${Math.round(Number(e.amount))} · ${e.account}${e.memo ? ' · ' + e.memo : ''}`,
     null, row);
   return row;
+}
+// Apply a new total-paid amount to an order: updates the row, posts the ledger
+// delta, audits it, and tells the customer. `paidRaw` is the new TOTAL paid
+// (not a delta) — same contract as the order PATCH `paid` field, so both the
+// finance-facing "record payment" flow and the driver's "cash collected on
+// delivery" flow share one code path and one behavior.
+function applyOrderPayment(actor, oid, cur, paidRaw, methodRaw, memo) {
+  const paid = Math.min(cur.total, Math.max(0, Number(paidRaw)));
+  const payStatus = paid >= cur.total ? 'paid' : (paid > 0 ? 'partial' : 'unpaid');
+  const method = PAY_METHOD_IDS.has(methodRaw) ? methodRaw : cur.payment_method;
+  db.prepare('UPDATE orders SET paid=?, payment_status=?, payment_method=? WHERE id=?').run(paid, payStatus, method, oid);
+  const inc = paid - cur.paid;
+  const via = 'via ' + payLabel(method);
+  if (inc > 0) postLedger(actor, { account: 'Cash / Bank', type: 'income', amount: inc, ref: 'order#' + oid, memo: 'Water sale · ' + via + (memo ? ' · ' + memo : '') });
+  else if (inc < 0) postLedger(actor, { account: 'Cash / Bank', type: 'expense', amount: -inc, ref: 'order#' + oid, memo: 'Payment refund · ' + via });
+  if (inc !== 0) audit(actor, 'order.pay', 'order', oid, `Payment on order #${oid}: paid ${cur.paid} → ${paid} of ${cur.total} (${payLabel(method)})`, { paid: cur.paid }, { paid, method });
+  if (inc > 0) {
+    const cu = db.prepare('SELECT u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
+    if (cu && cu.uid) notify([cu.uid], 'order',
+      payStatus === 'paid' ? `Payment received · Order #${oid}` : `Part payment received · Order #${oid}`,
+      `Rs ${Math.round(inc)} received ${via}. ${payStatus === 'paid' ? 'Your order is fully paid.' : 'Rs ' + Math.round(cur.total - paid) + ' still due.'}`,
+      `order#${oid}`);
+  }
+  return { paid, payStatus, method };
 }
 function authUser(req) {
   const h = req.headers['authorization'] || '';
@@ -208,6 +238,7 @@ function listOrders(filter = {}) {
 
 function listDeliveries(filter = {}) {
   let sql = `SELECT d.*, o.id AS order_id, o.status AS order_status, o.total AS order_total, o.paid AS order_paid,
+                    o.payment_method AS order_payment_method,
                     c.name AS customer, c.address AS customer_address, c.area AS customer_area, c.phone AS customer_phone,
                     c.lat AS lat, c.lng AS lng,
                     (SELECT GROUP_CONCAT(p.name || ' x' || oi.qty, '; ') FROM order_items oi JOIN products p ON p.id=oi.product_id WHERE oi.order_id=d.order_id) AS items
@@ -525,7 +556,7 @@ function sseBroadcast(event, exceptUserId) {
 }
 function officeUserIds() {
   // company accounts + every agent's login — the people who act on orders/customers
-  return db.prepare(`SELECT id FROM users WHERE status='active' AND (role IN ('admin','manager','finance') OR agent_id IS NOT NULL)`).all().map(r => r.id);
+  return db.prepare(`SELECT id FROM users WHERE status='active' AND (role IN ('admin','manager','shop_manager','finance') OR agent_id IS NOT NULL)`).all().map(r => r.id);
 }
 function sseOpen(userId, res) {
   res.writeHead(200, {
@@ -643,7 +674,7 @@ async function handleApi(req, res, url) {
     const email = String(b.email || '').trim().toLowerCase();
     const phone = String(b.phone || '').trim() || null;
     const password = String(b.password || '');
-    let role = ['admin', 'manager', 'finance', 'delivery', 'employee', 'agent', 'customer'].includes(b.role) ? b.role : null;
+    let role = ['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer'].includes(b.role) ? b.role : null;
     if (name.length < 2) return err(res, 400, 'Please enter a name');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(res, 400, 'Please enter a valid email');
     if (password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
@@ -682,7 +713,7 @@ async function handleApi(req, res, url) {
     const changes = [];
     let role = cur.role, salary = cur.salary, status = cur.status, phone = cur.phone, name = cur.name;
     if (b.role !== undefined && b.role !== cur.role) {
-      if (!['admin', 'manager', 'finance', 'delivery', 'employee', 'agent', 'customer'].includes(b.role))
+      if (!['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer'].includes(b.role))
         return err(res, 400, 'Invalid role');
       if (user.role !== 'admin' && ['admin', 'manager'].includes(b.role))
         return err(res, 403, 'Only an admin can assign admin/manager roles');
@@ -730,7 +761,7 @@ async function handleApi(req, res, url) {
 
   // ---- catalog (any authenticated; admins/managers also see inactive for re-enabling) ----
   if (method === 'GET' && parts[1] === 'products') {
-    requireRole(user, ['admin', 'manager', 'agent', 'finance', 'delivery', 'customer']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer']);
     const all = user && ['admin', 'manager'].includes(user.role);
     const rows = all
       ? db.prepare('SELECT * FROM products').all()
@@ -781,7 +812,7 @@ async function handleApi(req, res, url) {
 
   // ---- customers ----
   if (method === 'GET' && parts[1] === 'customers') {
-    requireRole(user, ['admin', 'manager', 'agent', 'finance']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance']);
     if (user.role === 'agent') {
       return json(res, 200, db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=?) AS orders_count
                                         FROM customers c WHERE c.id IN (SELECT DISTINCT customer_id FROM orders WHERE agent_id=?)
@@ -876,14 +907,14 @@ async function handleApi(req, res, url) {
 
   // ---- orders ----
   if (method === 'GET' && parts[1] === 'orders' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'agent', 'finance', 'delivery', 'customer']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer']);
     const filter = { role: user.role, status: url.searchParams.get('status') };
     if (user.role === 'customer') filter.customerId = user.customer_id;
     if (user.role === 'agent') filter.agentId = user.agent_id;
     return json(res, 200, listOrders(filter));
   }
   if (method === 'GET' && parts[1] === 'orders' && parts.length === 3 && !isNaN(+parts[2])) {
-    requireRole(user, ['admin', 'manager', 'agent', 'finance', 'delivery', 'customer']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer']);
     const o = db.prepare(Q.orders + ' WHERE o.id=?').get(+parts[2]);
     if (!o) return err(res, 404, 'Order not found');
     if (user.role === 'customer' && o.customer_id !== user.customer_id) return err(res, 403, 'Forbidden');
@@ -893,7 +924,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, o);
   }
   if (method === 'POST' && parts[1] === 'orders') {
-    requireRole(user, ['admin', 'manager', 'agent', 'customer']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'customer']);
     const b = await readBody(req);
     let custId;
     if (user.role === 'customer') custId = user.customer_id;
@@ -924,10 +955,10 @@ async function handleApi(req, res, url) {
     const orderId = r.lastInsertRowid;
     const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
     for (const row of prepared) insOI.run(orderId, ...row);
-    // Every new order notifies the office — admin + manager + finance always,
-    // plus the assigned agent — so it lands in their notification feed live.
+    // Every new order notifies the office — admin + manager + shop manager +
+    // finance always, plus the assigned agent — so it lands in their feed live.
     {
-      const targets = new Set(staffUserIds().filter(x => x !== user.id));
+      const targets = new Set(orderStaffUserIds().filter(x => x !== user.id));
       if (agentId) {
         // the agent's login account is a users row that points back at this agent
         const ag = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(agentId);
@@ -948,7 +979,7 @@ async function handleApi(req, res, url) {
     const b = await readBody(req);
 
     if (b.status !== undefined) {
-      const u = requireRole(user, ['admin', 'manager', 'delivery', 'agent']);
+      const u = requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery', 'agent']);
       if (user.role === 'customer') throw httpError(403, 'Forbidden');
       if (user.role === 'agent' && cur.agent_id !== user.agent_id) throw httpError(403, 'Not your order');
       const allowed = { new: ['confirmed', 'cancelled'], confirmed: ['in_delivery', 'cancelled', 'new'],
@@ -998,29 +1029,12 @@ async function handleApi(req, res, url) {
             b.status === 'confirmed' ? `New delivery to schedule · Order #${oid}` : `Order #${oid} — out for delivery`,
             `${cust ? cust.name : 'Customer'}${cust && cust.area ? ' · ' + cust.area : ''}`, `order#${oid}`);
         }
-        if (!['admin', 'manager', 'finance'].includes(user.role)) notify(staffUserIds().filter(x => x !== user.id), 'order', `Order #${oid} → ${titles[b.status] || b.status}`, null, `order#${oid}`);
+        if (!['admin', 'manager', 'shop_manager', 'finance'].includes(user.role)) notify(orderStaffUserIds().filter(x => x !== user.id), 'order', `Order #${oid} → ${titles[b.status] || b.status}`, null, `order#${oid}`);
       }
     }
     if (b.paid !== undefined) {
-      requireRole(user, ['admin', 'manager', 'finance']);
-      const paid = Math.min(cur.total, Math.max(0, Number(b.paid)));
-      const payStatus = paid >= cur.total ? 'paid' : (paid > 0 ? 'partial' : 'unpaid');
-      const method = PAY_METHOD_IDS.has(b.method) ? b.method : cur.payment_method;
-      db.prepare('UPDATE orders SET paid=?, payment_status=?, payment_method=? WHERE id=?').run(paid, payStatus, method, oid);
-      // ledger income for the new amount received
-      const inc = paid - cur.paid;
-      const via = 'via ' + payLabel(method);
-      if (inc > 0) postLedger(user, { account: 'Cash / Bank', type: 'income', amount: inc, ref: 'order#' + oid, memo: 'Water sale · ' + via + (b.memo ? ' · ' + b.memo : '') });
-      else if (inc < 0) postLedger(user, { account: 'Cash / Bank', type: 'expense', amount: -inc, ref: 'order#' + oid, memo: 'Payment refund · ' + via });
-      if (inc !== 0) audit(user, 'order.pay', 'order', oid, `Payment on order #${oid}: paid ${cur.paid} → ${paid} of ${cur.total} (${payLabel(method)})`, { paid: cur.paid }, { paid, method });
-      // tell the customer their payment landed
-      if (inc > 0) {
-        const cu = db.prepare('SELECT u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
-        if (cu && cu.uid) notify([cu.uid], 'order',
-          payStatus === 'paid' ? `Payment received · Order #${oid}` : `Part payment received · Order #${oid}`,
-          `Rs ${Math.round(inc)} received ${via}. ${payStatus === 'paid' ? 'Your order is fully paid.' : 'Rs ' + Math.round(cur.total - paid) + ' still due.'}`,
-          `order#${oid}`);
-      }
+      requireRole(user, ['admin', 'manager', 'shop_manager', 'finance']);
+      applyOrderPayment(user, oid, cur, b.paid, b.method, b.memo);
     }
     // the customer is notified in the block above; refresh the office + agents only
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
@@ -1029,7 +1043,7 @@ async function handleApi(req, res, url) {
 
   // ---- payment methods + the business's receiving accounts ----
   if (method === 'GET' && parts[1] === 'payment-methods') {
-    requireRole(user, ['admin', 'manager', 'finance', 'agent', 'customer']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'finance', 'agent', 'customer']);
     return json(res, 200, { methods: PAY_METHODS, accounts: paymentAccounts() });
   }
   if (method === 'POST' && parts[1] === 'payment-methods') {
@@ -1052,7 +1066,7 @@ async function handleApi(req, res, url) {
 
   // ---- deliveries ----
   if (method === 'GET' && parts[1] === 'deliveries' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'delivery', 'finance']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery', 'finance']);
     const filter = {};
     const st = url.searchParams.get('status');
     if (st) filter.status = st;
@@ -1076,7 +1090,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, plan);
   }
   if (method === 'GET' && parts[1] === 'deliveries' && parts.length === 3 && !isNaN(+parts[2])) {
-    requireRole(user, ['admin', 'manager', 'delivery']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
     const d = db.prepare(`SELECT d.*, c.name customer, c.address customer_address, c.phone customer_phone
                           FROM deliveries d JOIN orders o ON o.id=d.order_id JOIN customers c ON c.id=o.customer_id
                           WHERE d.id=?`).get(+parts[2]);
@@ -1088,7 +1102,7 @@ async function handleApi(req, res, url) {
     const did = +parts[2];
     const cur = db.prepare('SELECT * FROM deliveries WHERE id=?').get(did);
     if (!cur) return err(res, 404, 'Delivery not found');
-    requireRole(user, ['admin', 'manager', 'delivery']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
     const b = await readBody(req);
     const next = b.status || cur.status;
     const allowed = { pending: ['out_for_delivery', 'failed'], out_for_delivery: ['delivered', 'failed', 'pending'], delivered: [], failed: ['pending'] };
@@ -1099,8 +1113,15 @@ async function handleApi(req, res, url) {
     // keep the ORDER status in lockstep with the delivery
     if (next === 'out_for_delivery')
       db.prepare(`UPDATE orders SET status='in_delivery' WHERE id=? AND status IN ('new','confirmed')`).run(cur.order_id);
-    if (next === 'delivered')
+    if (next === 'delivered') {
       db.prepare(`UPDATE orders SET status='delivered' WHERE id=? AND status IN ('new','confirmed','in_delivery')`).run(cur.order_id);
+      // cash collected on the doorstep: record it right here so a COD order
+      // doesn't sit "unpaid" until someone in the office fixes it later
+      if (b.collected != null && Number(b.collected) > 0) {
+        const ord = db.prepare('SELECT * FROM orders WHERE id=?').get(cur.order_id);
+        if (ord) applyOrderPayment(user, cur.order_id, ord, ord.paid + Number(b.collected), b.method || ord.payment_method, b.memo || 'Collected on delivery');
+      }
+    }
     if (next === 'failed')
       db.prepare(`UPDATE orders SET status='confirmed' WHERE id=? AND status IN ('confirmed','in_delivery')`).run(cur.order_id);
     if (next === 'pending')
@@ -1123,7 +1144,7 @@ async function handleApi(req, res, url) {
           `${cust.name || 'Customer'}'s order #${cur.order_id}`, `order#${cur.order_id}`);
       }
       if (next === 'delivered' || next === 'failed') {
-        notify(staffUserIds().filter(x => x !== user.id), 'order',
+        notify(orderStaffUserIds().filter(x => x !== user.id), 'order',
           next === 'delivered' ? `Order #${cur.order_id} delivered` : `Order #${cur.order_id} delivery failed`,
           `${cust.name || 'Customer'} · ${next === 'delivered' ? 'completed by' : 'attempted by'} ${user.name}`,
           `order#${cur.order_id}`);
@@ -1219,7 +1240,7 @@ async function handleApi(req, res, url) {
     const period = url.searchParams.get('period') || new Date().toISOString().slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(period)) return err(res, 400, 'period must be YYYY-MM');
     const staff = db.prepare(`SELECT id, name, role, salary, status FROM users
-                              WHERE role IN ('admin','manager','finance','delivery','agent') AND status='active'
+                              WHERE role IN ('admin','manager','shop_manager','finance','delivery','agent') AND status='active'
                               ORDER BY role, name`).all();
     const rows = staff.map(u => {
       const entry = db.prepare('SELECT * FROM payroll WHERE user_id=? AND period=?').get(u.id, period);
@@ -1248,7 +1269,7 @@ async function handleApi(req, res, url) {
     const period = String(b.period || new Date().toISOString().slice(0, 7));
     if (!/^\d{4}-\d{2}$/.test(period)) return err(res, 400, 'period must be YYYY-MM');
     const staff = db.prepare(`SELECT id, salary, role FROM users
-                              WHERE role IN ('admin','manager','finance','delivery','agent') AND status='active'`).all();
+                              WHERE role IN ('admin','manager','shop_manager','finance','delivery','agent') AND status='active'`).all();
     let created = 0;
     for (const u of staff) {
       const existing = db.prepare('SELECT id FROM payroll WHERE user_id=? AND period=?').get(u.id, period);

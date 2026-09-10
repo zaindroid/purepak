@@ -338,7 +338,7 @@ const App = {
       const oid = +m[1];
       if (valid.includes('orders')) setTimeout(() => { try { Promise.resolve(modalOrderDetail(oid)).catch(() => {}); } catch {} }, 500);
     } else if (/^(comm|commission)#/.test(ref)) {
-      goto('commissions', 'dashboard');            // agent → "My commission"
+      goto('agents', 'commissions', 'dashboard');   // admin/manager/finance → merged page; agent → "My commission"
     } else if (/^agent#/.test(ref)) {
       goto('agents', 'commissions');
     } else if (/^payroll/.test(ref)) {

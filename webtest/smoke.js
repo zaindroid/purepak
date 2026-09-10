@@ -67,8 +67,8 @@ const nodeFetch = globalThis.fetch;
   }
 
   const roleRoutes = {
-    admin: ['dashboard', 'orders', 'deliveries', 'route', 'customers', 'agents', 'commissions', 'bookkeeping', 'receipts', 'team', 'payroll', 'products'],
-    finance: ['dashboard', 'bookkeeping', 'commissions', 'orders', 'receipts', 'payroll', 'agents'],
+    admin: ['dashboard', 'orders', 'deliveries', 'route', 'customers', 'agents', 'bookkeeping', 'receipts', 'team', 'payroll', 'products'],
+    finance: ['dashboard', 'bookkeeping', 'orders', 'receipts', 'payroll', 'agents'],
     agent: ['dashboard', 'orders', 'commissions', 'receipts'],
     delivery: ['route', 'deliveries'],
     customer: ['home', 'orders'],

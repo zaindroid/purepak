@@ -8,8 +8,8 @@ const OUT = path.join(__dirname, 'phone-audit');
 fs.mkdirSync(OUT, { recursive: true });
 
 const ROLES = [
-  { user: 'admin@purepak.pk',  label: 'admin',    routes: ['dashboard','orders','deliveries','route','customers','agents','commissions','bookkeeping','receipts','team','payroll','products'] },
-  { user: 'finance@purepak.pk', label: 'finance',  routes: ['dashboard','bookkeeping','commissions','orders','receipts','payroll','agents'] },
+  { user: 'admin@purepak.pk',  label: 'admin',    routes: ['dashboard','orders','deliveries','route','customers','agents','bookkeeping','receipts','team','payroll','products'] },
+  { user: 'finance@purepak.pk', label: 'finance',  routes: ['dashboard','bookkeeping','orders','receipts','payroll','agents'] },
   { user: 'hina@purepak.pk',    label: 'agent',    routes: ['dashboard','orders','commissions','receipts'] },
   { user: 'delivery@purepak.pk', label: 'delivery', routes: ['route','deliveries','receipts'] },
   { user: 'ali@rascon.pk',      label: 'customer', routes: ['home','orders'] },

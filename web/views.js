@@ -846,13 +846,25 @@ async function viewCommissions() {
     </tbody></table></div></div>`;
 }
 
+// Agents (roster + rate) and Commissions (per-order ledger + settlement) used
+// to be two separate nav pages for admin/manager/finance, even though they're
+// both just views onto the same agents/commissions data — split for no real
+// reason and easy to land on the wrong one. One page now: roster on top,
+// ledger below. The agent role's own "My commission" stays separate (below,
+// viewCommissions) — a single agent has no roster to manage, just their own
+// running ledger, so merging would only add noise there.
 async function viewAgents() {
   const u = API.user;
-  const canEdit = ['admin', 'manager', 'finance'].includes(u.role);
-  const agents = await API.agents();
+  const canAdd = ['admin', 'manager'].includes(u.role);
+  const canEditRate = ['admin', 'manager', 'finance'].includes(u.role);
+  const canSettle = ['admin', 'manager', 'finance'].includes(u.role);
+  const [agents, rows] = await Promise.all([API.agents(), API.commissions({})]);
+  const accrued = rows.filter(r => r.status === 'accrued');
+  const paid = rows.filter(r => r.status === 'paid');
+  const sum = (a) => a.reduce((s, r) => s + r.amount, 0);
   return `
-  <div class="page-head"><h1>Commission agents</h1><button class="btn primary sm" data-act="new-agent">+ Add agent</button></div>
-  ${canEdit ? '<p class="muted" style="font-size:12px;margin:2px 0 12px">Change a commission rate inline below — it applies to new orders from that agent (existing commissions keep the rate they were booked at).</p>' : ''}
+  <div class="page-head"><h1>Agents &amp; commissions</h1>${canAdd ? '<button class="btn primary sm" data-act="new-agent">+ Add agent</button>' : ''}</div>
+  ${canEditRate ? '<p class="muted" style="font-size:12px;margin:2px 0 12px">Change a commission rate inline below — it applies to new orders from that agent (existing commissions keep the rate they were booked at).</p>' : ''}
   ${agents.map(a => `
   <div class="team-row">
     <div class="team-av">${API.esc((a.name[0] || '?').toUpperCase())}</div>
@@ -861,14 +873,32 @@ async function viewAgents() {
       <div class="sub">${API.esc(a.phone || '—')}${a.area ? ' · ' + API.esc(a.area) : ''} · ${a.orders_count} orders · sales ${API.fmtMoney(a.sales)}</div>
     </div>
     <div style="flex:none;text-align:right">
-      ${canEdit ? `<div style="display:flex;gap:4px;align-items:center;justify-content:flex-end">
+      ${canEditRate ? `<div style="display:flex;gap:4px;align-items:center;justify-content:flex-end">
         <input data-act-none id="agPct${a.id}" type="number" min="0" max="50" step="0.5" value="${a.commission_pct}" class="input" style="width:58px;text-align:center">
         <span style="font-size:12px;color:var(--ink-3)">%</span>
         <button class="btn sm ${a.active ? 'ghost' : 'primary'}" data-act="agent-save" data-id="${a.id}" data-pct-input="agPct${a.id}" data-target-active="${a.active ? 0 : 1}">${a.active ? 'Deactivate' : 'Activate'}</button>
       </div>` : `<div style="font-weight:800">${a.commission_pct}%</div>`}
       <div class="muted" style="font-size:11px;margin-top:3px">due ${API.fmtMoney(a.outstanding_commission)}</div>
     </div>
-  </div>`).join('')}`;
+  </div>`).join('')}
+  <div class="sec-t">Commission ledger</div>
+  <div class="grid kpis">
+    ${V.kpiCard('Accrued (due)', API.fmtMoney(sum(accrued)), accrued.length + ' items', 'warn')}
+    ${V.kpiCard('Paid out', API.fmtMoney(sum(paid)), paid.length + ' items', 'good')}
+  </div>
+  <div class="card" style="margin-top:14px"><div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Order</th><th>Customer</th><th>Agent</th><th>Period</th><th class="num">Sales</th><th class="num">Pct</th><th class="num">Commission</th><th>Status</th><th></th></tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+      <td class="cell-main" data-l="Commission">Order #${r.order_id} <span class="muted" style="font-weight:600;font-size:12px">· ${r.period || '—'}</span></td>
+      ${V.m('Customer', API.esc(r.customer || '—'))}
+      ${V.m('Agent', API.esc(r.agent_name || '—'))}
+      ${V.m('Sales', API.fmtMoney(r.order_total), 'tv num')}
+      ${V.m('Rate', r.pct + '%', 'tv num')}
+      ${V.m('Commission', `<b>${API.fmtMoney(r.amount)}</b>`, 'tv num')}
+      ${V.m('Status', V.chip(r.status), 'tv')}
+      <td class="cell-act">${r.status === 'accrued' && canSettle ? `<button class="btn sm primary" data-act="settle-commission" data-id="${r.id}">Mark paid</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="9"><div class="empty"><div class="em-ico">${IC.cash}</div>No commissions yet</div></td></tr>`}
+    </tbody></table></div></div>`;
 }
 
 // ================= FINANCE =================
@@ -1790,7 +1820,7 @@ async function viewTeam() {
   const all = await API.users();
   const agents = all.filter(r => r.role === 'agent');
   // Team = employees only. Customers have their own page; agents are shown as a
-  // summary chip strip below (managed in Commission agents).
+  // summary chip strip below (managed in Agents & commissions).
   const rows = all.filter(r => r.role !== 'agent' && r.role !== 'customer')
     .sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1) || a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
   const pending = rows.filter(r => r.status === 'pending');
@@ -1811,9 +1841,9 @@ async function viewTeam() {
     ${pending.length ? '<div class="sec-t">Needs attention — ' + pending.length + ' awaiting activation</div>' : ''}
     ${rows.map(teamRowHtml).join('') || '<div class="empty">No employees yet.</div>'}
     ${canViewAgents ? `
-    <div class="sec-t">Commission agents — ${agents.length}</div>
+    <div class="sec-t">Agents — ${agents.length}</div>
     <div class="card" style="padding:14px 16px">
-      <p class="muted" style="font-size:12.5px;margin:0 0 10px">Agents are commission-based — their rates, activation and daily settings live in <b>Commission agents</b>.</p>
+      <p class="muted" style="font-size:12.5px;margin:0 0 10px">Agents are commission-based — their rates, activation and daily settings live in <b>Agents &amp; commissions</b>.</p>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
         ${agents.map(a => `<span class="chip ${a.status === 'pending' ? 'pending' : a.status === 'disabled' ? 'cancelled' : 'agent'}" style="text-transform:none;letter-spacing:0;font-weight:600">${API.esc(a.name)}</span>`).join('') || '<span class="muted" style="font-size:12.5px">No agents yet</span>'}
       </div>
@@ -1871,7 +1901,7 @@ function modalAddEmployee() {
         <label class="muted">Monthly salary (Rs, leave empty if none)</label>
         <input id="empSalary" class="input" style="width:100%;margin-bottom:4px" type="number" min="0" placeholder="e.g. 25000">
       </div>
-      <div id="empSalaryNote" style="display:none;margin:2px 0 4px"><p class="muted" style="font-size:11.5px;margin:0">Agents are commission-based — earnings come from order commissions, set their rate in <b>Commission agents</b>.</p></div>
+      <div id="empSalaryNote" style="display:none;margin:2px 0 4px"><p class="muted" style="font-size:11.5px;margin:0">Agents are commission-based — earnings come from order commissions, set their rate in <b>Agents &amp; commissions</b>.</p></div>
     </div>`,
     `<button class="btn ghost" data-close-modal>Cancel</button>
      <button class="btn primary" id="empSubmit">Add employee</button>`);
@@ -1924,7 +1954,7 @@ function modalEditEmployee(id) {
           <label class="muted">Monthly salary (Rs)</label>
           <input id="emSalary" class="input" style="width:100%;margin-bottom:4px" type="number" min="0" value="${r.salary ?? ''}">
         </div>
-        <div ${r.role === 'agent' ? '' : 'style="display:none"'} id="emSalaryNote"><p class="muted" style="font-size:11.5px;margin:0">Agents are commission-based — no fixed salary. Set the rate in <b>Commission agents</b>.</p></div>
+        <div ${r.role === 'agent' ? '' : 'style="display:none"'} id="emSalaryNote"><p class="muted" style="font-size:11.5px;margin:0">Agents are commission-based — no fixed salary. Set the rate in <b>Agents &amp; commissions</b>.</p></div>
         <p class="muted" style="font-size:11.5px;margin-top:8px">Changing the role or salary notifies the employee and staff. Payroll uses the salary for the current and future months.</p>
       </div>`,
       `<button class="btn ghost" data-close-modal>Cancel</button>
@@ -1988,7 +2018,7 @@ async function viewPayroll() {
           : `<button class="btn ghost sm" data-act="payroll-pay-one" data-uid="${r.user_id}" data-amt="${r.entry ? r.entry.amount : (r.salary || r.commission || 0)}">Add & pay</button>`)}
     </div>`;
   }).join('') || '<div class="empty">No staff with a salary yet. Set salaries from Team.</div>'}
-  <p class="muted" style="font-size:12px;margin-top:10px">Salaries post to the ledger under <b>Salaries &amp; Wages</b>. Agents are commission-based — paying their accrued commission posts to <b>Commissions</b> and settles it in the Commissions screen.</p>`;
+  <p class="muted" style="font-size:12px;margin-top:10px">Salaries post to the ledger under <b>Salaries &amp; Wages</b>. Agents are commission-based — paying their accrued commission posts to <b>Commissions</b> and settles it in <b>Agents &amp; commissions</b>.</p>`;
 }
 
 // ---- customers (with type) ----
@@ -2188,8 +2218,7 @@ const ADMIN_NAV = [
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
   { to: 'route', icon: IC.route, label: 'Route map' },
   { to: 'customers', icon: IC.users, label: 'Customers', section: 'Sales' },
-  { to: 'agents', icon: IC.badge, label: 'Agents' },
-  { to: 'commissions', icon: IC.cash, label: 'Commissions' },
+  { to: 'agents', icon: IC.badge, label: 'Agents & commissions' },
   { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping', section: 'Finance' },
   { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
   { to: 'payments', icon: IC.wallet, label: 'Payment methods' },
@@ -2213,11 +2242,10 @@ function navFor(role) {
     finance: [
       { to: 'dashboard', icon: IC.chart, label: 'Finance' },
       { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping' },
-      { to: 'commissions', icon: IC.cash, label: 'Agent dues' },
       { to: 'orders', icon: IC.box, label: 'Order payments' },
       { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
       { to: 'payroll', icon: IC.wallet, label: 'Payroll' },
-      { to: 'agents', icon: IC.badge, label: 'Agents' },
+      { to: 'agents', icon: IC.badge, label: 'Agents & commissions' },
     ],
     agent: [
       { to: 'dashboard', icon: IC.chart, label: 'My dashboard' },
@@ -2248,7 +2276,7 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
+    agents: viewAgents, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },
@@ -2256,11 +2284,11 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, commissions: viewCommissions, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
+    agents: viewAgents, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },
-  finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, commissions: viewCommissions, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents },
+  finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents },
   agent: { dashboard: viewAgentDashboard, orders: viewOrders, commissions: viewCommissions, receipts: viewReceipts },
   delivery: { route: viewSmartRoute, deliveries: viewDeliveries, receipts: viewReceipts },
   shop_manager: { orders: viewOrders, deliveries: viewDeliveries },

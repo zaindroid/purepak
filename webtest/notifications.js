@@ -136,7 +136,7 @@ const has = (list, re, refRe) => list.some(n => re.test((n.title || '') + ' ' + 
     });
   };
   await bellRoutes('admin@purepak.pk', 'admin', [
-    ['order#3', '#/orders'], ['receipt#1', '#/receipts'], ['comm#1', '#/commissions'],
+    ['order#3', '#/orders'], ['receipt#1', '#/receipts'], ['comm#1', '#/agents'],
     ['agent#1', '#/agents'], ['payroll#2026-09', '#/payroll'], ['user#2', '#/team'], ['product#0', '#/products'],
   ]);
   await bellRoutes('ali@rascon.pk', 'customer', [['order#3', '#/orders']]);

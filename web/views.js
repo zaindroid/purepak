@@ -81,6 +81,8 @@ const V = {
   },
   chip(status) { return `<span class="chip ${status}">${API.statusLabel(status)}</span>`; },
   payChip(method) { return `<span class="chip pay-${method || 'cod'}">${PAY_LABEL[method] || PAY_LABEL.cod}</span>`; },
+  // "1 order" / "2 orders" — pass a custom plural for irregulars
+  plural(n, word, pl) { return `${n} ${Number(n) === 1 ? word : (pl || word + 's')}`; },
   // mobile card row: <td data-l="Label">value</td> — label appears above value on phones, ignored on desktop
   m(label, val, cls = '') { return `<td class="${cls}" data-l="${label}">${val}</td>`; },
   orderStatusFlow(o) {
@@ -186,7 +188,9 @@ async function modalCreateOrder(opts = {}) {
   const products = await API.products();
   let custHtml = '';
   if (opts.customer) {
-    custHtml = `<div class="field"><span>Customer</span><input value="${API.esc(opts.customer.name)}" disabled></div>`;
+    // customer role orders only for themselves — the "Delivering to" block below already
+    // names them; a disabled Customer field is just noise.
+    custHtml = role === 'customer' ? '' : `<div class="field"><span>Customer</span><input value="${API.esc(opts.customer.name)}" disabled></div>`;
   } else {
     const customers = await API.customers();
     custHtml = `<div class="field"><span>Customer</span><select id="ocCustomer">${customers.map(c => `<option value="${c.id}">${API.esc(c.name)} · ${API.esc(c.area || '')}</option>`).join('')}</select></div>`;
@@ -290,7 +294,7 @@ async function modalOrderDetail(id) {
     ${o.notes ? `<div class="section-label">Note</div><div style="font-size:13.5px">${API.esc(o.notes)}</div>` : ''}
     <div class="section-label">Progress</div>
     ${V.orderStatusFlow(o)}
-    ${o.deliveries.length ? `<div class="section-label">Deliveries</div>` + o.deliveries.map(d => `<div class="item-line"><span>${API.esc(d.driver)} · ${API.chip(d.status)}</span><span class="muted">${API.fmtDate(d.delivered_at) }</span></div>`).join('') : ''}
+    ${o.deliveries.length ? `<div class="section-label">Deliveries</div>` + o.deliveries.map(d => `<div class="item-line"><span>${API.esc(d.driver || 'Unassigned')} · ${V.chip(d.status)}</span><span class="muted">${d.delivered_at ? API.fmtDate(d.delivered_at) : ''}</span></div>`).join('') : ''}
   `, actions ? `<div style="display:flex;gap:8px;width:100%;flex-wrap:wrap">${actions}</div>` : '');
 }
 
@@ -360,26 +364,15 @@ function modalAddAgent() {
 
 // ================= ADMIN =================
 async function viewAdminDashboard() {
-  const [k, monthly, top, orders] = await Promise.all([API.kpis(), API.monthly(), API.topCustomers(), API.orders()]);
+  const [k, monthlyRaw, top, orders] = await Promise.all([API.kpis(), API.monthly(), API.topCustomers(), API.orders()]);
+  // only show the trend chart once there's more than one month of real history;
+  // a row of empty bars reads as "broken", not "new business"
+  const monthly = (monthlyRaw || []).filter(m => (m.income || 0) > 0 || (m.expense || 0) > 0);
+  const showTrend = monthly.length >= 2;
   const max = Math.max(...monthly.map(m => Math.max(m.income, m.expense)), 1);
-  return `
-  <div class="page-head"><h1>Dashboard</h1><button class="btn primary sm" data-act="new-order">+ New order</button></div>
-  <div class="grid kpis">
-    ${V.kpiCard('Orders today', k.today_orders, 'all customers')}
-    ${V.kpiCard('Open orders', k.open_orders, 'new + confirmed + dispatch')}
-    ${V.kpiCard('Deliveries open', k.open_deliveries, 'pending + on road')}
-    ${V.kpiCard('Bottles this month', k.units_month.toLocaleString(), 'units sold')}
-  </div>
-  <div class="grid kpis" style="margin-top:14px">
-    ${V.kpiCard('Income · month', API.fmtMoney(k.month_revenue), 'gross collections', 'good')}
-    ${V.kpiCard('Expenses · month', API.fmtMoney(k.month_expenses), null, 'bad')}
-    ${V.kpiCard('Net · month', API.fmtMoney(k.month_profit), k.month_profit >= 0 ? 'healthy' : 'negative', k.month_profit >= 0 ? 'good' : 'bad')}
-    ${V.kpiCard('Receivable', API.fmtMoney(k.outstanding_customers), 'customers owe')}
-    ${V.kpiCard('Agent dues', API.fmtMoney(k.outstanding_agents), 'commissions accrued')}
-  </div>
-  <div class="grid grid-2col" style="margin-top:14px">
+  const trendCard = showTrend ? `
     <div class="card">
-      <div class="card-head"><h2>Income vs expenses · 6 months</h2></div>
+      <div class="card-head"><h2>Income vs expenses</h2><span class="muted" style="font-size:12px">last ${monthly.length} months</span></div>
       <div class="card-pad">
         <div class="barchart">${monthly.map(m => `
           <div class="bar-col">
@@ -392,10 +385,32 @@ async function viewAdminDashboard() {
         </div>
         <div class="legend"><span><i style="background:var(--blue-500)"></i>Income</span><span><i style="background:var(--red)"></i>Expenses</span></div>
       </div>
-    </div>
+    </div>` : `
+    <div class="card">
+      <div class="card-head"><h2>This month</h2></div>
+      <div class="card-pad month-snap">
+        <div><span>Collected</span><b class="good">${API.fmtMoney(k.month_revenue)}</b></div>
+        <div><span>Spent</span><b class="bad">${API.fmtMoney(k.month_expenses)}</b></div>
+        <div><span>Net</span><b class="${k.month_profit >= 0 ? 'good' : 'bad'}">${API.fmtMoney(k.month_profit)}</b></div>
+      </div>
+    </div>`;
+  return `
+  <div class="page-head"><h1>Dashboard</h1><button class="btn primary sm" data-act="new-order">+ New order</button></div>
+  <div class="grid kpis">
+    ${V.kpiCard('Open orders', k.open_orders, 'awaiting delivery')}
+    ${V.kpiCard('Deliveries in progress', k.open_deliveries, 'pending + on the road')}
+    ${V.kpiCard('Bottles this month', k.units_month.toLocaleString(), 'units sold')}
+  </div>
+  <div class="grid kpis" style="margin-top:14px">
+    ${V.kpiCard('Collected · month', API.fmtMoney(k.month_revenue), 'payments received', 'good')}
+    ${V.kpiCard('Net · month', API.fmtMoney(k.month_profit), k.month_profit >= 0 ? 'in profit' : 'in the red', k.month_profit >= 0 ? 'good' : 'bad')}
+    ${V.kpiCard('Receivable', API.fmtMoney(k.outstanding_customers), 'customers owe')}
+  </div>
+  <div class="grid grid-2col" style="margin-top:14px">
+    ${trendCard}
     <div class="card">
       <div class="card-head"><h2>Top customers</h2></div>
-      ${top.map((t, i) => `<div class="list-row"><div class="grow"><div class="t">${i + 1}. ${API.esc(t.name)}</div><div class="s">${t.orders} orders</div></div><div style="font-weight:700">${API.fmtMoney(t.sales)}</div></div>`).join('') || '<div class="empty">No data</div>'}
+      ${top.map((t, i) => `<div class="list-row"><div class="grow"><div class="t">${i + 1}. ${API.esc(t.name)}</div><div class="s">${V.plural(t.orders, 'order')}</div></div><div style="font-weight:700">${API.fmtMoney(t.sales)}</div></div>`).join('') || '<div class="empty">No data</div>'}
     </div>
   </div>
   <div class="card" style="margin-top:14px">
@@ -455,7 +470,7 @@ async function viewOrders({ status = '' } = {}) {
     ${canOrder ? `<button class="btn primary sm" data-act="new-order">+ New order</button>` : ''}</div>
   ${filters.length ? `<div class="filters">${filters.map(f => `<button class="chip-filter ${f === status ? 'active' : ''}" data-act="filter-orders" data-status="${f}">${f === 'all' ? 'All' : API.statusLabel(f)}</button>`).join('')}</div>` : ''}
   <div class="card"><div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>#</th><th>${API.user.role === 'agent' ? 'Customer' : 'Customer'}</th><th>Items</th>${API.user.role !== 'customer' ? '<th>Agent</th>' : ''}<th>Placed</th><th class="num">Total</th><th>Payment</th><th>Status</th></tr></thead>
+    <thead><tr><th>#</th><th>Customer</th><th>Items</th>${API.user.role !== 'customer' ? '<th>Agent</th>' : ''}<th class="num">Total</th><th>Payment</th><th>Status</th></tr></thead>
     <tbody>${orders.map(o => `
       <tr style="cursor:pointer" data-act="view-order" data-id="${o.id}">
         <td class="cell-main" data-l="Order">#${o.id} <span class="muted" style="font-weight:600;font-size:12px">${API.fmtDay(o.placed_at)}</span></td>
@@ -465,7 +480,7 @@ async function viewOrders({ status = '' } = {}) {
         ${V.m('Total', API.fmtMoney(o.total), 'tv num')}
         ${V.m('Payment', `${V.chip(o.payment_status)} ${V.payChip(o.payment_method)}`, 'tv')}
         ${V.m('Status', V.chip(o.status), 'tv')}
-      </tr>`).join('') || `<tr><td colspan="8"><div class="empty"><div class="em-ico">${IC.box}</div>No orders found</div></td></tr>`}
+      </tr>`).join('') || `<tr><td colspan="7"><div class="empty"><div class="em-ico">${IC.box}</div>No orders found</div></td></tr>`}
     </tbody></table></div></div>`;
 }
 
@@ -477,7 +492,7 @@ async function viewDeliveries({ status = '' } = {}) {
   <div class="page-head"><h1>Deliveries</h1></div>
   <div class="filters">${filters.map(f => `<button class="chip-filter ${f === status ? 'active' : ''}" data-act="filter-deliveries" data-status="${f}">${f === 'all' ? 'All' : API.statusLabel(f)}</button>`).join('')}</div>
   <div class="card"><div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>#</th><th>Order</th><th>Items</th><th>Address</th><th>Driver</th><th>Scheduled</th><th class="num">Amount due</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th>Customer</th><th>Items</th><th>Driver</th><th>Scheduled</th><th class="num">Amount due</th><th>Status</th><th></th></tr></thead>
     <tbody>${d.map(x => {
       const due = Math.round((x.order_total - x.order_paid) * 100) / 100;
       let act = '';
@@ -493,7 +508,7 @@ async function viewDeliveries({ status = '' } = {}) {
       ${V.m('Amount due', due > 0 ? API.fmtMoney(due) : '<span class="muted">settled</span>', 'tv num')}
       ${V.m('Status', V.chip(x.status), 'tv')}
       <td class="cell-act">${act}</td></tr>`;
-    }).join('') || `<tr><td colspan="9"><div class="empty"><div class="em-ico">${IC.truck}</div>Nothing here right now</div></td></tr>`}
+    }).join('') || `<tr><td colspan="8"><div class="empty"><div class="em-ico">${IC.truck}</div>Nothing here right now</div></td></tr>`}
     </tbody></table></div></div>`;
 }
 
@@ -734,7 +749,7 @@ async function viewProfile() {
       </div>
     </div>
     <div class="grid kpis" style="margin-top:16px">
-      ${V.kpiCard('Salary', me.salary ? API.fmtMoney(me.salary) + '/mth' : '—', me.salary ? 'fixed' : 'not set')}
+      ${V.kpiCard('Salary', me.salary ? API.fmtMoney(me.salary) : '—', me.salary ? 'per month' : 'not set')}
       ${V.kpiCard('Account', me.status === 'active' ? 'Active' : me.status, me.status === 'active' ? 'in good standing' : '')}
     </div>
   </div>
@@ -825,22 +840,21 @@ async function viewAgents() {
 // ================= FINANCE =================
 async function viewFinanceDashboard() {
   const month = new Date().toISOString().slice(0, 7);
-  const [sum, monthly, orders, agents] = await Promise.all([API.ledgerSummary(month), API.monthly(), API.orders(), API.agents()]);
+  const [sum, monthlyRaw, orders] = await Promise.all([API.ledgerSummary(month), API.monthly(), API.orders()]);
+  const monthly = (monthlyRaw || []).filter(m => (m.income || 0) > 0 || (m.expense || 0) > 0);
+  const showTrend = monthly.length >= 2;
   const dueOrders = orders.filter(o => o.payment_status !== 'paid' && o.status !== 'cancelled');
-  const dueAgents = agents.reduce((s, a) => s + a.outstanding_commission, 0);
   return `
   <div class="page-head"><h1>Finance</h1><button class="btn sm" data-act="add-expense">+ Expense</button><button class="btn sm" data-act="add-income">+ Income</button></div>
   <div class="grid kpis">
-    ${V.kpiCard('Income · ' + new Date().toLocaleString('en', { month: 'long' }), API.fmtMoney(sum.month_income), null, 'good')}
-    ${V.kpiCard('Expenses · month', API.fmtMoney(sum.month_expense), null, 'bad')}
-    ${V.kpiCard('Net · month', API.fmtMoney(sum.month_net), sum.month_net >= 0 ? 'positive' : 'negative', sum.month_net >= 0 ? 'good' : 'bad')}
-    ${V.kpiCard('All-time net', API.fmtMoney(sum.all_time_net), API.fmtMoney(sum.all_time_income) + ' in · ' + API.fmtMoney(sum.all_time_expense) + ' out')}
-    ${V.kpiCard('Receivable', API.fmtMoney(dueOrders.reduce((s, o) => s + (o.total - o.paid), 0)), dueOrders.length + ' open orders', 'warn')}
-    ${V.kpiCard('Agent dues', API.fmtMoney(dueAgents), 'unsettled commissions', 'warn')}
+    ${V.kpiCard('Income · ' + new Date().toLocaleString('en', { month: 'long' }), API.fmtMoney(sum.month_income), 'this month', 'good')}
+    ${V.kpiCard('Expenses · month', API.fmtMoney(sum.month_expense), 'this month', 'bad')}
+    ${V.kpiCard('Net · month', API.fmtMoney(sum.month_net), sum.month_net >= 0 ? 'in profit' : 'in the red', sum.month_net >= 0 ? 'good' : 'bad')}
+    ${V.kpiCard('Receivable', API.fmtMoney(dueOrders.reduce((s, o) => s + (o.total - o.paid), 0)), V.plural(dueOrders.length, 'open order'), 'warn')}
   </div>
   <div class="grid grid-2col" style="margin-top:14px">
-    <div class="card">
-      <div class="card-head"><h2>Cash flow · 6 months</h2></div>
+    ${showTrend ? `<div class="card">
+      <div class="card-head"><h2>Cash flow</h2><span class="muted" style="font-size:12px">last ${monthly.length} months</span></div>
       <div class="card-pad">
         <div class="barchart">${monthly.map(m => {
           const max = Math.max(...monthly.map(x => Math.max(x.income, x.expense)), 1);
@@ -851,7 +865,14 @@ async function viewFinanceDashboard() {
         }).join('')}</div>
         <div class="legend"><span><i style="background:var(--blue-500)"></i>Income</span><span><i style="background:var(--red)"></i>Expenses</span></div>
       </div>
-    </div>
+    </div>` : `<div class="card">
+      <div class="card-head"><h2>This month</h2></div>
+      <div class="card-pad month-snap">
+        <div><span>Income</span><b class="good">${API.fmtMoney(sum.month_income)}</b></div>
+        <div><span>Expenses</span><b class="bad">${API.fmtMoney(sum.month_expense)}</b></div>
+        <div><span>Net</span><b class="${sum.month_net >= 0 ? 'good' : 'bad'}">${API.fmtMoney(sum.month_net)}</b></div>
+      </div>
+    </div>`}
     <div class="card">
       <div class="card-head"><h2>By account · this month</h2></div>
       ${sum.by_account.map(a => `<div class="list-row"><div class="grow"><div class="t">${API.esc(a.account)}</div><div class="s">${a.type}</div></div>${V.chip(a.type)}</div><div class="list-row" style="padding-top:0;padding-bottom:14px"><div class="grow"></div><b>${API.fmtMoney(a.total)}</b></div>`).join('') || '<div class="empty">No entries</div>'}
@@ -900,7 +921,7 @@ async function viewBookkeeping() {
     </tr>`;
   };
   return `
-  <div class="page-head"><h1>Book keeping</h1><button class="btn sm" data-act="add-expense">+ Expense</button><button class="btn primary sm" data-act="add-income">+ Income</button></div>
+  <div class="page-head"><h1>Bookkeeping</h1><button class="btn sm" data-act="add-expense">+ Expense</button><button class="btn primary sm" data-act="add-income">+ Income</button></div>
   <p class="muted" style="font-size:12.5px;margin:6px 0 10px">Every money movement in one place — sales, purchases, payroll, commissions and scanned receipts. Entries are <b>append-only</b>: a mistake is fixed with a reversing entry, never edited or deleted${isAdmin ? ' (admin-only)' : ''}.</p>
   ${integ}
   <div class="grid kpis">
@@ -951,11 +972,27 @@ async function viewAudit() {
     'ledger.create': 'Ledger entry', 'ledger.void': 'Entry voided', 'ledger.correct': 'Entry corrected',
     'order.pay': 'Order payment', 'commission.settle': 'Commission settled', 'payroll.pay': 'Payroll paid', 'receipt.post': 'Receipt posted',
   };
+  // Human field-level diff. Creates/deletes are described by e.summary already,
+  // so only render this for genuine before→after changes.
+  const MONEY_KEYS = new Set(['amount', 'paid', 'total', 'price', 'rate', 'salary', 'commission', 'subtotal', 'tax']);
+  const SKIP_KEYS = new Set(['id', 'at', 'hash', 'prev_hash', 'created_at', 'updated_at', 'entered_by', 'entered_b', 'reversal_entry']);
+  const norm = (x) => (x == null || x === '' ? null : x);
+  const fmtVal = (k, x) => {
+    if (x == null || x === '') return '—';
+    if (typeof x === 'object') return API.esc(JSON.stringify(x));
+    if (MONEY_KEYS.has(k) && !isNaN(+x)) return API.fmtMoney(+x);
+    return API.esc(String(x));
+  };
   const diff = (e) => {
-    if (!e.before && !e.after) return '';
-    const b = e.before ? JSON.stringify(e.before) : '—';
-    const a = e.after ? JSON.stringify(e.after) : '—';
-    return `<div class="aud-diff"><span class="muted">was</span> ${API.esc(b.slice(0, 160))} <span class="muted">→</span> ${API.esc(a.slice(0, 160))}</div>`;
+    const b = e.before && typeof e.before === 'object' && Object.keys(e.before).length ? e.before : null;
+    const a = e.after && typeof e.after === 'object' && Object.keys(e.after).length ? e.after : null;
+    if (!b || !a) return '';
+    const keys = [...new Set([...Object.keys(b), ...Object.keys(a)])]
+      .filter(k => !SKIP_KEYS.has(k) && JSON.stringify(norm(b[k])) !== JSON.stringify(norm(a[k])));
+    if (!keys.length) return '';
+    return `<div class="aud-diff">${keys.map(k =>
+      `<span class="aud-k">${API.esc(k.replace(/_/g, ' '))}</span> ${fmtVal(k, b[k])} <span class="muted">&rarr;</span> <b>${fmtVal(k, a[k])}</b>`
+    ).join('<br>')}</div>`;
   };
   return `
   <div class="page-head"><h1>Audit trail</h1></div>
@@ -1151,7 +1188,7 @@ async function viewCustomerHome() {
   <a class="wa-fab" href="${WA_LINK}" aria-label="Chat with PurePak on WhatsApp">${WA_ICON}</a>
 
   <div class="cartbar" id="shopCartBar" hidden>
-    <div class="cartbar-sum"><b id="shopCartQty">0</b> bottles &middot; <b id="shopCartTotal">${API.fmtMoney(0)}</b></div>
+    <div class="cartbar-sum"><b id="shopCartQty">0</b> <span id="shopCartUnit">bottles</span> &middot; <b id="shopCartTotal">${API.fmtMoney(0)}</b></div>
     <button class="btn primary" data-shop="checkout">Review order</button>
   </div>`;
 }
@@ -1172,7 +1209,9 @@ function applyCartToDom() {
     bar.hidden = qty === 0;
     const qEl = document.getElementById('shopCartQty');
     const tEl = document.getElementById('shopCartTotal');
+    const uEl = document.getElementById('shopCartUnit');
     if (qEl) qEl.textContent = qty;
+    if (uEl) uEl.textContent = qty === 1 ? 'bottle' : 'bottles';
     if (tEl) tEl.textContent = API.fmtMoney(total);
   }
   document.body.classList.toggle('has-cartbar', qty > 0);
@@ -1928,7 +1967,7 @@ async function viewCustomers() {
       <div class="team-av">${API.esc((c.name[0] || '?').toUpperCase())}</div>
       <div class="team-main">
         <div class="nm">${API.esc(c.name)} <span class="chip ${c.type === 'retail' ? 'pending' : 'approved'}">${c.type}</span></div>
-        <div class="sub">${API.esc(c.contact_name || c.phone)}${c.address ? ' · ' + API.esc(c.address) : ''}${c.orders_count ? ' · ' + c.orders_count + ' orders' : ''}</div>
+        <div class="sub">${API.esc(c.contact_name || c.phone || '—')}${c.address ? ' · ' + API.esc(c.address) : ''}${c.orders_count ? ' · ' + V.plural(c.orders_count, 'order') : ''}</div>
       </div>
       ${canEdit ? `<div class="team-acts"><button class="btn ghost sm" data-act="edit-customer" data-id="${c.id}">Edit</button></div>` : ''}
     </div>`).join('')}`;
@@ -2019,13 +2058,11 @@ async function viewProducts() {
     <div class="card" style="margin-bottom:16px"><div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Product</th><th class="num">Size</th><th class="num">Base price</th><th>Status</th>${canEdit ? '<th></th>' : ''}</tr></thead>
       <tbody>${ps.map(p => `<tr style="${p.active ? '' : 'opacity:.55'}">
-        <td class="cell-main" data-l="Product">${API.esc(p.name)}${p.active ? '' : ' <span class="chip cancelled">Paused</span>'}
-          ${canEdit ? ` <button class="btn ghost sm" style="margin-left:6px" data-act="edit-product" data-id="${p.id}">Edit</button>` : ''}
-        </td>
-        ${V.m('Size', p.size_ml + ' ml', 'tv num')}
+        <td class="cell-main" data-l="Product">${API.esc(p.name)}${p.active ? '' : ' <span class="chip cancelled">Paused</span>'}</td>
+        ${V.m('Size', sizeLabel(p.size_ml), 'tv num')}
         ${V.m('Price', API.fmtMoney(p.price), 'tv num')}
         ${V.m('Status', p.active ? '<span class="chip approved">Active</span>' : '<span class="chip cancelled">Off</span>', '')}
-        ${canEdit ? `<td class="tv"><button class="btn sm ${p.active ? 'ghost' : 'primary'}" data-act="toggle-product" data-id="${p.id}" data-active="${p.active ? 1 : 0}">${p.active ? 'Pause' : 'Enable'}</button></td>` : ''}
+        ${canEdit ? `<td class="cell-act"><button class="btn ghost sm" data-act="edit-product" data-id="${p.id}">Edit</button> <button class="btn sm ${p.active ? 'ghost' : 'primary'}" data-act="toggle-product" data-id="${p.id}" data-active="${p.active ? 1 : 0}">${p.active ? 'Pause' : 'Enable'}</button></td>` : ''}
       </tr>`).join('')}</tbody></table></div></div>
     <div class="sec-t">Price list by customer type</div>
     <div class="matrix-wrap"><table class="matrix">
@@ -2117,7 +2154,7 @@ const ADMIN_NAV = [
   { to: 'customers', icon: IC.users, label: 'Customers' },
   { to: 'agents', icon: IC.badge, label: 'Agents' },
   { to: 'commissions', icon: IC.cash, label: 'Commissions' },
-  { to: 'bookkeeping', icon: IC.book, label: 'Book keeping' },
+  { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping' },
   { to: 'audit', icon: IC.clip, label: 'Audit trail' },
   { to: 'payments', icon: IC.wallet, label: 'Payment methods' },
   { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
@@ -2131,7 +2168,7 @@ function navFor(role) {
     manager: ADMIN_NAV,
     finance: [
       { to: 'dashboard', icon: IC.chart, label: 'Finance' },
-      { to: 'bookkeeping', icon: IC.book, label: 'Book keeping' },
+      { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping' },
       { to: 'commissions', icon: IC.cash, label: 'Agent dues' },
       { to: 'orders', icon: IC.box, label: 'Order payments' },
       { to: 'receipts', icon: IC.receipt, label: 'Receipts' },

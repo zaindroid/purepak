@@ -935,7 +935,7 @@ async function handleApi(req, res, url) {
       }
       const units = prepared.reduce((s, row) => s + row[1], 0);
       notify([...targets], 'order', 'New order received',
-        `${cust.name} · ${units} bottle(s) · Rs ${total}`, 'order#' + orderId);
+        `${cust.name} · ${units} ${units === 1 ? 'bottle' : 'bottles'} · Rs ${total}`, 'order#' + orderId);
     }
     // nudge only the office + agents to refresh their boards — NOT other customers
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'order');
@@ -1115,15 +1115,18 @@ async function handleApi(req, res, url) {
         delivered: `Your water order #${cur.order_id} has been delivered.`,
         failed: `Delivery of order #${cur.order_id} was not completed. Our team will follow up.`,
       };
+      const cust = db.prepare('SELECT name FROM customers WHERE id=?').get(ord.customer_id) || {};
       if (custU && custU.uid) notify([custU.uid], 'order', T[next], B[next], `order#${cur.order_id}`);
       if (ord.agent_id) {
         const ag = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(ord.agent_id);
-        if (ag && ag.id !== user.id) notify([ag.id], 'order', `Order #${cur.order_id} — ${T[next].toLowerCase()}`, null, `order#${cur.order_id}`);
+        if (ag && ag.id !== user.id) notify([ag.id], 'order', `Order #${cur.order_id} — ${T[next].toLowerCase()}`,
+          `${cust.name || 'Customer'}'s order #${cur.order_id}`, `order#${cur.order_id}`);
       }
       if (next === 'delivered' || next === 'failed') {
         notify(staffUserIds().filter(x => x !== user.id), 'order',
           next === 'delivered' ? `Order #${cur.order_id} delivered` : `Order #${cur.order_id} delivery failed`,
-          null, `order#${cur.order_id}`);
+          `${cust.name || 'Customer'} · ${next === 'delivered' ? 'completed by' : 'attempted by'} ${user.name}`,
+          `order#${cur.order_id}`);
       }
     }
     // customer notified above on delivered/failed; refresh the office + agents only

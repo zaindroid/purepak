@@ -109,7 +109,14 @@ input,select,textarea{font:inherit}
 .card{background:var(--card);border:1px solid var(--line-2);border-radius:var(--radius);box-shadow:var(--shadow)}
 .kpi{padding:14px 16px}
 .kpi .k-label{font-size:12px;color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
-.kpi .k-val{font-size:26px;font-weight:800;letter-spacing:-.6px;margin-top:6px}
+.kpi .k-val{font-size:26px;font-weight:800;letter-spacing:-.6px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.month-snap{display:flex;flex-direction:column;gap:2px}
+.month-snap>div{display:flex;justify-content:space-between;align-items:baseline;padding:12px 2px;border-bottom:1px solid var(--line-2)}
+.month-snap>div:last-child{border-bottom:0}
+.month-snap span{color:var(--ink-3);font-size:13px}
+.month-snap b{font-size:19px;font-weight:800;letter-spacing:-.3px}
+.month-snap b.good{color:var(--green-ink)}
+.month-snap b.bad{color:var(--red-ink)}
 .kpi .k-sub{font-size:12px;color:var(--ink-3);margin-top:4px}
 .kpi.good .k-val{color:var(--green-ink)}
 .kpi.warn .k-val{color:var(--amber-ink)}
@@ -722,8 +729,10 @@ body.has-cartbar .wa-fab{bottom:calc(80px + env(safe-area-inset-bottom))}
 .tbl tr.row-reversed td{opacity:.6}
 .tbl tr.row-reversed .cell-main span:first-child{text-decoration:line-through}
 
-.aud-diff{font-size:11px;margin-top:3px;word-break:break-word}
+.aud-diff{font-size:11.5px;margin-top:4px;word-break:break-word;line-height:1.7}
 .aud-diff code{background:rgba(0,0,0,.05);padding:0 3px;border-radius:4px}
+.aud-k{display:inline-block;min-width:74px;color:var(--ink-3);text-transform:capitalize;font-weight:600}
+.aud-diff b{color:var(--ink-1);font-weight:700}
 
 /* receipt scan: "here's what the AI read" confirm step */
 .scan-note{font-size:12.5px;line-height:1.5;padding:10px 12px;border-radius:10px;margin-bottom:12px}

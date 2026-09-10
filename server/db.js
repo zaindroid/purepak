@@ -329,6 +329,12 @@ function seedDemo(db) {
     // keep at least one paid sale in the current calendar month regardless of the
     // day the demo is seeded, so month-to-date revenue / KPIs are never a flat 0
     [4, 2, [[6000, 6], [12000, 2]], 3, 'delivered', 1.0],
+    // a healthy run of paid, delivered sales this calendar month so the owner's
+    // dashboard opens on a business that's comfortably in profit, not "in the red"
+    [1, 0, [[19000, 30], [6000, 40]], 8, 'delivered', 1.0],
+    [3, 1, [[19000, 45]], 6, 'delivered', 1.0],
+    [4, 2, [[12000, 55], [6000, 35]], 4, 'delivered', 1.0],
+    [0, 0, [[19000, 70], [12000, 55]], 2, 'delivered', 1.0],
     [0, 0, [[12000, 2]], 1, 'new', 0.0],
     [2, 1, [[19000, 2], [6000, 4]], 0, 'confirmed', 1.0],
   ];

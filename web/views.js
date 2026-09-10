@@ -546,35 +546,6 @@ async function viewDeliveries({ status = '' } = {}) {
     </tbody></table></div></div>`;
 }
 
-async function viewDriverBoard() {
-  const [ofd, pending] = await Promise.all([API.deliveries('out_for_delivery'), API.deliveries('pending')]);
-  return `
-  <div class="page-head"><h1>Today's route</h1></div>
-  <div class="section-label" style="margin-top:0">On the road (${ofd.length})</div>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
-    ${ofd.map(x => driverCard(x, 'out_for_delivery')).join('') || `<div class="card card-pad empty" style="grid-column:1/-1"><div class="em-ico">${IC.route}</div>No active trips</div>`}
-  </div>
-  <div class="section-label">Scheduled / queued (${pending.length})</div>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
-    ${pending.map(x => driverCard(x, 'pending')).join('') || `<div class="card card-pad empty" style="grid-column:1/-1"><div class="em-ico">${IC.clip}</div>Queue is clear</div>`}
-  </div>`;
-}
-function driverCard(x, kind) {
-  const due = Math.round((x.order_total - x.order_paid) * 100) / 100;
-  let act = kind === 'pending' ? `<button class="btn primary block sm" data-act="del-ofd" data-id="${x.id}">Start trip</button>`
-    : `<button class="btn primary block sm" data-act="del-done" data-id="${x.id}">Mark delivered</button>`;
-  return `<div class="card card-pad">
-    <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:15px">${API.esc(x.customer)}</b>${V.chip(x.status)}</div>
-    <div style="color:var(--ink-3);font-size:13px;margin-top:2px">${API.esc(x.customer_address || '')} ${x.customer_area ? '· ' + API.esc(x.customer_area) : ''}</div>
-    <div style="margin-top:8px;font-size:13.5px;display:flex;align-items:center;gap:6px;color:var(--ink-2)">${IC.box} ${API.esc(x.items)}</div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:13px">
-      <a href="tel:${API.esc(x.customer_phone || '')}" style="color:var(--blue-700);text-decoration:none;display:inline-flex;align-items:center;gap:4px">${IC.phone} ${API.esc(x.customer_phone || '')}</a>
-      <span>${due > 0 ? '<b style="color:var(--amber-ink)">collect ' + API.fmtMoney(due) + '</b>' : '<span style="color:var(--green-ink)">paid</span>'}</span>
-    </div>
-    <div style="margin-top:10px">${act}</div>
-  </div>`;
-}
-
 // ================= SMART ROUTE (map + 3-up queue + proximity alerts) =================
 let smartRoute = { plan: null, myPos: null, notified: new Set() };
 
@@ -1847,7 +1818,7 @@ async function viewTeam() {
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
         ${agents.map(a => `<span class="chip ${a.status === 'pending' ? 'pending' : a.status === 'disabled' ? 'cancelled' : 'agent'}" style="text-transform:none;letter-spacing:0;font-weight:600">${API.esc(a.name)}</span>`).join('') || '<span class="muted" style="font-size:12.5px">No agents yet</span>'}
       </div>
-      <button class="btn sm" data-act="nav" data-to="agents">Open commission agents →</button>
+      <button class="btn sm" data-act="nav" data-to="agents">Open agents &amp; commissions →</button>
     </div>` : ''}`;
 
   function teamRowHtml(r) {

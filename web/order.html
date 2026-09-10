@@ -33,19 +33,29 @@
   .top-tag{font-size:12.5px;opacity:.92;margin:6px 0 0}
   .trust{display:flex;gap:14px;margin-top:14px;font-size:11px;font-weight:600;opacity:.95;flex-wrap:wrap}
   .trust span{display:flex;align-items:center;gap:5px}
+  .trust svg{width:14px;height:14px;flex:none;opacity:.95}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
   .sec-t{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:20px 0 10px}
-  .prod{display:flex;align-items:center;gap:12px;padding:13px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:8px}
-  .prod-ic{width:38px;height:38px;border-radius:10px;background:var(--blue-50);display:grid;place-items:center;flex:none;color:var(--blue-700)}
+  .prod{position:relative;display:flex;align-items:center;gap:13px;padding:12px;border:1px solid var(--line);border-radius:16px;
+    background:#fff;margin-bottom:10px;box-shadow:0 1px 2px rgba(16,42,83,.04);transition:border-color .15s,box-shadow .15s}
+  .prod.in-cart{border-color:var(--blue-500);box-shadow:0 2px 10px rgba(33,150,243,.12)}
+  .prod-img{width:58px;height:70px;flex:none;border-radius:12px;background:radial-gradient(circle at 50% 35%,var(--blue-50) 0%,#fff 72%);
+    display:grid;place-items:center;overflow:hidden}
+  .prod-img img{width:100%;height:100%;object-fit:contain;display:block}
+  .prod-pop{position:absolute;top:-8px;left:10px;background:var(--grad-water);color:#fff;font-size:9.5px;font-weight:800;
+    letter-spacing:.03em;text-transform:uppercase;padding:3px 8px;border-radius:999px;box-shadow:0 2px 6px rgba(25,118,210,.3)}
   .prod-main{flex:1;min-width:0}
-  .prod-nm{font-weight:700;font-size:14.5px}
-  .prod-pr{font-size:12.5px;color:var(--ink-3);margin-top:1px}
-  .prod-pr b{color:var(--ink);font-weight:700}
-  .stepper{display:flex;align-items:center;gap:0;flex:none}
-  .stepper button{width:32px;height:32px;border-radius:9px;border:1px solid var(--line);background:#fff;font-size:17px;font-weight:700;color:var(--blue-700);display:grid;place-items:center;cursor:pointer}
-  .stepper button:active{background:var(--blue-50)}
-  .stepper .qty{width:28px;text-align:center;font-weight:800;font-size:14.5px}
-  .addbtn{padding:8px 16px;border-radius:9px;border:none;background:var(--blue-700);color:#fff;font-weight:700;font-size:13px;cursor:pointer}
+  .prod-nm{font-weight:800;font-size:14.5px;letter-spacing:-.1px}
+  .prod-sz{font-size:11.5px;color:var(--ink-3);margin-top:1px}
+  .prod-pr{font-size:13px;margin-top:4px}
+  .prod-pr b{color:var(--blue-800);font-weight:800;font-size:15px}
+  .prod-pr span{color:var(--ink-3);font-size:11.5px}
+  .stepper{display:flex;align-items:center;gap:0;flex:none;background:var(--blue-50);border-radius:10px;padding:2px}
+  .stepper button{width:30px;height:30px;border-radius:8px;border:none;background:transparent;font-size:17px;font-weight:700;color:var(--blue-700);display:grid;place-items:center;cursor:pointer}
+  .stepper button:active{background:#fff}
+  .stepper .qty{width:26px;text-align:center;font-weight:800;font-size:14.5px;color:var(--ink)}
+  .addbtn{flex:none;padding:9px 18px;border-radius:10px;border:none;background:var(--blue-700);color:#fff;font-weight:700;font-size:13px;cursor:pointer}
+  .addbtn:active{background:var(--blue-800)}
   .cartbar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);
     padding:12px 16px calc(12px + env(safe-area-inset-bottom));box-shadow:0 -6px 18px rgba(16,42,83,.08);z-index:20}
   .cartbar-inner{max-width:520px;margin:0 auto;display:flex;align-items:center;gap:12px}
@@ -88,9 +98,9 @@
     <div class="top-brand"><img src="img/pure-pak-logo.jpeg" alt="PurePak"><b>PurePak</b></div>
     <p class="top-tag">Purity in every drop. Order in under a minute — no app, no login.</p>
     <div class="trust">
-      <span>🚚 Same-day delivery</span>
-      <span>💵 Pay on delivery</span>
-      <span>✅ Lab-tested water</span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="14" height="11" rx="1.5"/><path d="M15 9h4l3 3.5V17h-7"/><circle cx="6" cy="18.5" r="2"/><circle cx="17.5" cy="18.5" r="2"/></svg>Same-day delivery</span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.8"/></svg>Pay on delivery</span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l8 3v6c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10v-6l8-3z"/><path d="M9 11.5l2 2 4-4"/></svg>Lab-tested water</span>
     </div>
   </div>
 </div>
@@ -115,7 +125,7 @@
       <label class="field"><span>Delivery address</span><textarea id="fAddress" placeholder="House / street, area, landmark"></textarea></label>
       <label class="field"><span>Area (optional)</span><input id="fArea" placeholder="e.g. I-8, DHA, Johar Town"></label>
       <label class="field"><span>Note for the rider (optional)</span><input id="fNote" placeholder="e.g. call before arriving"></label>
-      <div class="pay-note">💵 Pay cash when your order arrives — no payment needed now.</div>
+      <div class="pay-note"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.8"/></svg>Pay cash when your order arrives — no payment needed now.</div>
       <div id="formErr" class="err"></div>
     </div>
   </div>
@@ -127,7 +137,7 @@
       <h1>Order placed!</h1>
       <p>Thanks — we'll call to confirm and get it moving.</p>
       <div class="done-order">Order <b id="doneOrderId">#—</b> · <b id="doneOrderTotal">Rs 0</b> · Cash on delivery</div>
-      <a class="btn ghost block" id="waBtn" href="#">💬 Message us on WhatsApp</a>
+      <a class="btn ghost block" id="waBtn" href="#"><svg viewBox="0 0 32 32" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M16 3C9.373 3 4 8.373 4 15c0 2.65.86 5.1 2.316 7.09L4.6 28l6.13-1.607A11.94 11.94 0 0 0 16 27c6.627 0 12-5.373 12-12S22.627 3 16 3zm0 21.82a9.78 9.78 0 0 1-5.04-1.49l-.36-.23-3.64.955.97-3.55-.24-.37A9.78 9.78 0 0 1 6.18 15c0-5.42 4.41-9.83 9.82-9.83 2.62 0 5.09 1.02 6.94 2.88a9.75 9.75 0 0 1 2.88 6.95c0 5.42-4.41 9.82-9.82 9.82zm5.39-7.36c-.3-.15-1.75-.86-2.02-.96-.27-.1-.47-.15-.66.15-.2.3-.76.96-.93 1.15-.17.2-.34.22-.63.07-.3-.15-1.25-.46-2.38-1.47-.88-.79-1.47-1.76-1.65-2.06-.17-.3-.02-.46.13-.6.13-.13.3-.34.44-.5.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.66-1.6-.9-2.19-.24-.57-.48-.5-.66-.5l-.57-.01c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.48 0 1.47 1.07 2.88 1.22 3.08.15.2 2.1 3.2 5.08 4.49.71.3 1.26.49 1.7.63.71.23 1.36.2 1.87.12.57-.08 1.75-.72 2-1.4.25-.7.25-1.28.17-1.4-.07-.13-.27-.2-.57-.35z"/></svg>Message us on WhatsApp</a>
       <button class="btn ghost block" id="newOrderBtn" style="margin-top:10px">Place another order</button>
     </div>
   </div>
@@ -165,7 +175,10 @@
   function money(n){ return 'Rs ' + Math.round(Number(n)||0).toLocaleString('en-PK'); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
-  var BOTTLE_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5h4M10.5 2.5v3L8.5 8v11a2.5 2.5 0 0 0 2.5 2.5h2A2.5 2.5 0 0 0 15.5 19V8l-2-2.5v-3"/><path d="M8.5 12h7M8.5 15.5h7"/></svg>';
+  // real product photos, downsized once and cached alongside the page — a
+  // few KB each, not the multi-hundred-KB source shots, so this stays fast
+  // even on a slow mobile connection
+  var BOTTLE_IMG = { 500: 'bottle-500ml.png', 1500: 'bottle-1.5l.png', 6000: 'bottle-6l.png', 12000: 'bottle-12l.png', 19000: 'bottle-19l.png' };
 
   function cartUnits(){ var n=0; for (var k in cart) n += cart[k]; return n; }
   function cartTotal(){
@@ -185,11 +198,18 @@
   }
   function renderProducts(){
     var list = document.getElementById('prodList');
+    // "most popular" = the 19L dispenser bottle, else the biggest size — same
+    // rule the main storefront uses, so the badge is consistent everywhere
+    var popId = (products.find(function(p){ return p.size_ml === 19000; }) ||
+      products.slice().sort(function(a,b){ return b.size_ml - a.size_ml; })[0] || {}).id;
     list.innerHTML = products.map(function(p){
       var qty = cart[p.id] || 0;
-      return '<div class="prod" data-pid="'+p.id+'">' +
-        '<div class="prod-ic">'+BOTTLE_ICON+'</div>' +
-        '<div class="prod-main"><div class="prod-nm">'+esc(p.name)+'</div><div class="prod-pr"><b>'+money(p.price)+'</b> / bottle · '+sizeLabel(p.size_ml)+'</div></div>' +
+      var img = BOTTLE_IMG[p.size_ml];
+      return '<div class="prod'+(qty>0?' in-cart':'')+'" data-pid="'+p.id+'">' +
+        (p.id === popId ? '<span class="prod-pop">Popular</span>' : '') +
+        '<div class="prod-img">'+(img ? '<img src="img/'+img+'" alt="'+esc(p.name)+'" width="160" height="160" loading="lazy">' : '')+'</div>' +
+        '<div class="prod-main"><div class="prod-nm">'+esc(p.name)+'</div><div class="prod-sz">'+sizeLabel(p.size_ml)+' bottle</div>' +
+        '<div class="prod-pr"><b>'+money(p.price)+'</b><span> / bottle</span></div></div>' +
         (qty > 0
           ? '<div class="stepper"><button data-act="dec" data-pid="'+p.id+'">−</button><span class="qty">'+qty+'</span><button data-act="inc" data-pid="'+p.id+'">+</button></div>'
           : '<button class="addbtn" data-act="add" data-pid="'+p.id+'">Add</button>') +

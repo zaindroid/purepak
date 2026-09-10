@@ -13,6 +13,22 @@ const WEB_ROOT = path.join(__dirname, '..', 'web');
 const DATA_DIR = process.env.PUREPAK_DATA_DIR || path.join(__dirname, 'data');
 const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
 const SESSIONS = new Map(); // token -> {user, createdAt}
+// Public guest-order rate limiting (the QR landing page has no auth at all) —
+// a coarse per-IP + per-phone throttle, not a CAPTCHA; enough to blunt casual
+// abuse of a form anyone on the street can reach.
+const PUBLIC_ORDER_HITS = new Map(); // "ip:x" | "phone:x" -> [timestamps]
+function rateLimited(key, max, windowMs) {
+  const now = Date.now();
+  const hits = (PUBLIC_ORDER_HITS.get(key) || []).filter(t => now - t < windowMs);
+  hits.push(now);
+  PUBLIC_ORDER_HITS.set(key, hits);
+  return hits.length > max;
+}
+function clientIp(req) {
+  const fwd = req.headers['x-forwarded-for'];
+  if (fwd) return String(fwd).split(',')[0].trim();
+  return (req.socket && req.socket.remoteAddress) || 'unknown';
+}
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -652,6 +668,84 @@ async function handleApi(req, res, url) {
     const h = req.headers['authorization'] || '';
     if (h.startsWith('Bearer ')) SESSIONS.delete(h.slice(7));
     return json(res, 200, { ok: true });
+  }
+
+  // ---- public guest ordering: the QR-code landing page (/order) — no login,
+  // no app, just name + phone + address + a basket. Powers order.html. ----
+  if (method === 'GET' && parts[1] === 'public' && parts[2] === 'products') {
+    const rows = db.prepare('SELECT id, name, size_ml, price FROM products WHERE active=1 ORDER BY size_ml').all();
+    return json(res, 200, rows);
+  }
+  if (method === 'POST' && parts[1] === 'public' && parts[2] === 'order') {
+    const ip = clientIp(req);
+    // generous per-IP ceiling — a public WiFi / shared office connection can
+    // legitimately send several different customers' orders through one IP
+    if (rateLimited('ip:' + ip, 20, 60 * 60 * 1000))
+      return err(res, 429, 'Too many orders from this connection — please try again later or message us on WhatsApp.');
+    const b = await readBody(req);
+    const name = String(b.name || '').trim().slice(0, 80);
+    const phoneRaw = String(b.phone || '').trim().slice(0, 30);
+    const phoneDigits = phoneRaw.replace(/\D/g, '');
+    const address = String(b.address || '').trim().slice(0, 300);
+    const area = String(b.area || '').trim().slice(0, 60) || null;
+    if (name.length < 2) return err(res, 400, 'Please enter your name');
+    if (phoneDigits.length < 10 || phoneDigits.length > 13) return err(res, 400, 'Please enter a valid phone number');
+    if (address.length < 5) return err(res, 400, 'Please enter your delivery address');
+    if (rateLimited('phone:' + phoneDigits, 5, 60 * 60 * 1000))
+      return err(res, 429, 'Too many orders for this number — please try again later or message us on WhatsApp.');
+    const items = Array.isArray(b.items) ? b.items.filter(it => it && Number(it.qty) > 0) : [];
+    if (!items.length) return err(res, 400, 'Choose at least one item');
+    if (items.length > 10) return err(res, 400, 'Too many different items in one order');
+
+    // reuse an existing customer matched by phone (any punctuation) so a
+    // returning customer automatically gets their real pricing tier back
+    const digitsOf = (p) => String(p || '').replace(/\D/g, '');
+    const cust = db.prepare('SELECT * FROM customers').all().find(c => digitsOf(c.phone) === phoneDigits);
+    let custId, custType, deliveryNote = null;
+    if (cust) {
+      custId = cust.id; custType = cust.type;
+      if (!cust.address || !cust.address.trim()) {
+        db.prepare('UPDATE customers SET address=?, area=COALESCE(area,?) WHERE id=?').run(address, area, custId);
+      } else if (cust.address.trim() !== address) {
+        deliveryNote = 'Deliver to: ' + address; // don't clobber their saved address, just flag it for this order
+      }
+    } else {
+      const cr = db.prepare('INSERT INTO customers(name,phone,address,area,type) VALUES (?,?,?,?,?)')
+        .run(name, phoneRaw, address, area, 'retail');
+      custId = Number(cr.lastInsertRowid); custType = 'retail';
+    }
+
+    let total = 0;
+    const prepared = [];
+    for (const it of items) {
+      const p = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(it.product_id);
+      if (!p) return err(res, 400, 'Unknown product');
+      const qty = Math.max(1, Math.min(50, Math.round(Number(it.qty) || 1)));
+      const price = priceForCustomer(p.id, custType);
+      total += qty * price;
+      prepared.push([p.id, qty, price, qty * price]);
+    }
+    if (total <= 0) return err(res, 400, 'Order total must be greater than zero');
+
+    // which physical QR sticker this came from (?src= in the URL) — lets staff
+    // see which city locations are actually driving orders, no schema change
+    const src = String(b.source || '').trim().replace(/[^a-zA-Z0-9\-_. ]/g, '').slice(0, 40);
+    const guestNote = String(b.notes || '').trim().slice(0, 300) || null;
+    const notes = [src ? `QR: ${src}` : null, deliveryNote, guestNote].filter(Boolean).join(' · ') || null;
+
+    const r = db.prepare(`INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,payment_method,notes)
+                          VALUES (?,?,?,?,?,?,?,?)`).run(custId, null, 'new', total, 0, 'unpaid', 'cod', notes);
+    const orderId = r.lastInsertRowid;
+    const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
+    for (const row of prepared) insOI.run(orderId, ...row);
+
+    const units = prepared.reduce((s, row) => s + row[1], 0);
+    notify(orderStaffUserIds(), 'order', 'New order received (QR)',
+      `${name} · ${units} ${units === 1 ? 'bottle' : 'bottles'} · Rs ${Math.round(total)}${src ? ' · via ' + src : ''}`,
+      'order#' + orderId);
+    sseSendMany(officeUserIds(), 'order');
+
+    return json(res, 201, { id: orderId, total });
   }
 
   // ---- team / user management (admin + manager) ----
@@ -1698,7 +1792,9 @@ function staticHeaders(ext, p) {
   };
 }
 function serveStatic(req, res, url) {
-  let p = url.pathname === '/' ? '/index.html' : url.pathname;
+  // /order is the public QR-landing page — a short, memorable URL (printable
+  // under the QR code too) for a page that's really order.html on disk.
+  let p = url.pathname === '/' ? '/index.html' : (url.pathname === '/order' ? '/order.html' : url.pathname);
   const file = path.normalize(path.join(WEB_ROOT, p));
   if (!file.startsWith(WEB_ROOT)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(file, (e, data) => {

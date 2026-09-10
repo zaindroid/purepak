@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a4d8c">
+<title>Order water · PurePak</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="icon" href="img/pure-pak-logo.jpeg">
+<style>
+  :root{
+    --blue-900:#0a4d8c; --blue-800:#0d5ea9; --blue-700:#1976d2; --blue-600:#2196f3; --blue-500:#42a5f5;
+    --blue-100:#e3f0fd; --blue-50:#f3f9ff;
+    --ink:#0d1b2a; --ink-2:#334155; --ink-3:#64748b;
+    --line:#e2e8f0; --line-2:#eef2f7; --bg:#f1f5fb; --card:#fff;
+    --green:#16a34a; --green-bg:#e8f7ee; --green-ink:#0f7a37;
+    --red:#dc2626; --red-bg:#fdecec; --red-ink:#b91c1c;
+    --radius:16px; --shadow:0 1px 2px rgba(16,42,83,.06),0 8px 24px rgba(16,42,83,.08);
+    --grad-water:linear-gradient(135deg,#1976d2 0%,#2196f3 45%,#22b07d 130%);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:'Inter',-apple-system,system-ui,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--ink);
+    -webkit-tap-highlight-color:transparent;padding-bottom:96px}
+  img{max-width:100%}
+  button,input{font-family:inherit}
+  .wrap{max-width:520px;margin:0 auto;padding:0 16px}
+  .top{background:var(--grad-water);color:#fff;padding:18px 16px 22px;border-radius:0 0 22px 22px;box-shadow:var(--shadow)}
+  .top-brand{display:flex;align-items:center;gap:10px}
+  .top-brand img{width:34px;height:34px;border-radius:9px;background:#fff;padding:3px}
+  .top-brand b{font-size:18px;letter-spacing:-.2px}
+  .top-tag{font-size:12.5px;opacity:.92;margin:6px 0 0}
+  .trust{display:flex;gap:14px;margin-top:14px;font-size:11px;font-weight:600;opacity:.95;flex-wrap:wrap}
+  .trust span{display:flex;align-items:center;gap:5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+  .sec-t{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:20px 0 10px}
+  .prod{display:flex;align-items:center;gap:12px;padding:13px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:8px}
+  .prod-ic{width:38px;height:38px;border-radius:10px;background:var(--blue-50);display:grid;place-items:center;flex:none;color:var(--blue-700)}
+  .prod-main{flex:1;min-width:0}
+  .prod-nm{font-weight:700;font-size:14.5px}
+  .prod-pr{font-size:12.5px;color:var(--ink-3);margin-top:1px}
+  .prod-pr b{color:var(--ink);font-weight:700}
+  .stepper{display:flex;align-items:center;gap:0;flex:none}
+  .stepper button{width:32px;height:32px;border-radius:9px;border:1px solid var(--line);background:#fff;font-size:17px;font-weight:700;color:var(--blue-700);display:grid;place-items:center;cursor:pointer}
+  .stepper button:active{background:var(--blue-50)}
+  .stepper .qty{width:28px;text-align:center;font-weight:800;font-size:14.5px}
+  .addbtn{padding:8px 16px;border-radius:9px;border:none;background:var(--blue-700);color:#fff;font-weight:700;font-size:13px;cursor:pointer}
+  .cartbar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom));box-shadow:0 -6px 18px rgba(16,42,83,.08);z-index:20}
+  .cartbar-inner{max-width:520px;margin:0 auto;display:flex;align-items:center;gap:12px}
+  .cartbar-sum{flex:1;font-size:13px;color:var(--ink-3)}
+  .cartbar-sum b{display:block;font-size:16px;color:var(--ink);font-weight:800}
+  .btn{border:none;border-radius:12px;font-weight:700;font-size:14.5px;padding:13px 18px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:8px;text-decoration:none}
+  .btn.primary{background:var(--grad-water);color:#fff;box-shadow:0 4px 14px rgba(25,118,210,.28)}
+  .btn.primary:disabled{opacity:.45;box-shadow:none;cursor:not-allowed}
+  .btn.block{width:100%}
+  .btn.ghost{background:#fff;border:1px solid var(--line);color:var(--ink-2)}
+  .field{display:block;margin-bottom:12px}
+  .field span{display:block;font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:5px}
+  .field input,.field textarea{width:100%;padding:12px 13px;border:1.5px solid var(--line);border-radius:11px;font-size:15px;color:var(--ink);background:#fff}
+  .field input:focus,.field textarea:focus{outline:none;border-color:var(--blue-600)}
+  .field textarea{resize:vertical;min-height:64px}
+  .hint{font-size:11.5px;color:var(--ink-3);margin-top:4px}
+  .err{background:var(--red-bg);color:var(--red-ink);border-radius:10px;padding:9px 12px;font-size:13px;font-weight:600;margin:10px 0 0;display:none}
+  .backrow{display:flex;align-items:center;gap:8px;margin:16px 0 4px;color:var(--blue-700);font-weight:700;font-size:13.5px;cursor:pointer;user-select:none}
+  [hidden]{display:none!important}
+  .step{padding-top:16px}
+  .done-wrap{text-align:center;padding:40px 16px 20px}
+  .done-ico{width:64px;height:64px;border-radius:50%;background:var(--green-bg);color:var(--green-ink);display:grid;place-items:center;margin:0 auto 16px}
+  .done-wrap h1{font-size:20px;margin:0 0 6px}
+  .done-wrap p{color:var(--ink-3);font-size:14px;margin:0 0 4px}
+  .done-order{font-size:14px;color:var(--ink-2);margin:14px 0 22px}
+  .done-order b{color:var(--blue-800)}
+  .signin-note{text-align:center;font-size:12.5px;color:var(--ink-3);margin-top:22px}
+  .signin-note a{color:var(--blue-700);font-weight:700;text-decoration:none}
+  .pay-note{display:flex;align-items:center;gap:8px;background:var(--blue-50);color:var(--blue-800);border-radius:11px;padding:10px 12px;font-size:12.5px;font-weight:600;margin:14px 0}
+  .spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="wrap">
+    <div class="top-brand"><img src="img/pure-pak-logo.jpeg" alt="PurePak"><b>PurePak</b></div>
+    <p class="top-tag">Purity in every drop. Order in under a minute — no app, no login.</p>
+    <div class="trust">
+      <span>🚚 Same-day delivery</span>
+      <span>💵 Pay on delivery</span>
+      <span>✅ Lab-tested water</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- STEP 1: pick water -->
+  <div id="step1" class="step">
+    <div class="sec-t">Choose your water</div>
+    <div id="prodList"></div>
+  </div>
+
+  <!-- STEP 2: contact + address -->
+  <div id="step2" class="step" hidden>
+    <div class="backrow" id="backToStep1">← Back to order</div>
+    <div class="sec-t">Where should we deliver?</div>
+    <div class="card" style="padding:16px">
+      <label class="field"><span>Your name</span><input id="fName" placeholder="e.g. Ahmed Khan" autocomplete="name"></label>
+      <label class="field"><span>Phone number</span><input id="fPhone" type="tel" placeholder="03XX-XXXXXXX" autocomplete="tel" inputmode="tel"></label>
+      <label class="field"><span>Delivery address</span><textarea id="fAddress" placeholder="House / street, area, landmark"></textarea></label>
+      <label class="field"><span>Area (optional)</span><input id="fArea" placeholder="e.g. I-8, DHA, Johar Town"></label>
+      <label class="field"><span>Note for the rider (optional)</span><input id="fNote" placeholder="e.g. call before arriving"></label>
+      <div class="pay-note">💵 Pay cash when your order arrives — no payment needed now.</div>
+      <div id="formErr" class="err"></div>
+    </div>
+  </div>
+
+  <!-- STEP 3: confirmation -->
+  <div id="step3" class="step" hidden>
+    <div class="done-wrap">
+      <div class="done-ico"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+      <h1>Order placed!</h1>
+      <p>Thanks — we'll call to confirm and get it moving.</p>
+      <div class="done-order">Order <b id="doneOrderId">#—</b> · <b id="doneOrderTotal">Rs 0</b> · Cash on delivery</div>
+      <a class="btn ghost block" id="waBtn" href="#">💬 Message us on WhatsApp</a>
+      <button class="btn ghost block" id="newOrderBtn" style="margin-top:10px">Place another order</button>
+    </div>
+  </div>
+
+  <p class="signin-note" id="signinNote">Ordering regularly? <a href="/">Create a free account</a> for saved addresses, order history and business pricing.</p>
+</div>
+
+<!-- sticky cart bar (step 1 only) -->
+<div class="cartbar" id="cartBar" hidden>
+  <div class="cartbar-inner">
+    <div class="cartbar-sum"><span id="cartCount">0 bottles</span><b id="cartTotal">Rs 0</b></div>
+    <button class="btn primary" id="continueBtn">Continue →</button>
+  </div>
+</div>
+<!-- sticky submit bar (step 2 only) -->
+<div class="cartbar" id="submitBar" hidden>
+  <div class="cartbar-inner">
+    <div class="cartbar-sum"><span>Total due on delivery</span><b id="submitTotal">Rs 0</b></div>
+    <button class="btn primary" id="placeBtn">Place order</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+  var WA_NUMBER = '923156666796';
+  var cart = {}; // product_id -> qty
+  var products = [];
+  var src = (new URLSearchParams(location.search).get('src') || '').slice(0, 40);
+
+  function sizeLabel(ml){
+    if (ml >= 1000) { var l = ml/1000; return (Number.isInteger(l) ? l : l.toFixed(1)) + ' L'; }
+    return ml + ' ml';
+  }
+  function money(n){ return 'Rs ' + Math.round(Number(n)||0).toLocaleString('en-PK'); }
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+  var BOTTLE_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5h4M10.5 2.5v3L8.5 8v11a2.5 2.5 0 0 0 2.5 2.5h2A2.5 2.5 0 0 0 15.5 19V8l-2-2.5v-3"/><path d="M8.5 12h7M8.5 15.5h7"/></svg>';
+
+  function cartUnits(){ var n=0; for (var k in cart) n += cart[k]; return n; }
+  function cartTotal(){
+    var t = 0;
+    for (var k in cart) {
+      var p = products.find(function(x){ return String(x.id)===String(k); });
+      if (p) t += cart[k] * p.price;
+    }
+    return t;
+  }
+  function renderCartBar(){
+    var n = cartUnits(), t = cartTotal();
+    document.getElementById('cartCount').textContent = n + (n===1?' bottle':' bottles');
+    document.getElementById('cartTotal').textContent = money(t);
+    document.getElementById('cartBar').hidden = n === 0;
+    document.getElementById('continueBtn').disabled = n === 0;
+  }
+  function renderProducts(){
+    var list = document.getElementById('prodList');
+    list.innerHTML = products.map(function(p){
+      var qty = cart[p.id] || 0;
+      return '<div class="prod" data-pid="'+p.id+'">' +
+        '<div class="prod-ic">'+BOTTLE_ICON+'</div>' +
+        '<div class="prod-main"><div class="prod-nm">'+esc(p.name)+'</div><div class="prod-pr"><b>'+money(p.price)+'</b> / bottle · '+sizeLabel(p.size_ml)+'</div></div>' +
+        (qty > 0
+          ? '<div class="stepper"><button data-act="dec" data-pid="'+p.id+'">−</button><span class="qty">'+qty+'</span><button data-act="inc" data-pid="'+p.id+'">+</button></div>'
+          : '<button class="addbtn" data-act="add" data-pid="'+p.id+'">Add</button>') +
+        '</div>';
+    }).join('');
+  }
+  function setQty(pid, qty){
+    qty = Math.max(0, Math.min(50, qty));
+    if (qty === 0) delete cart[pid]; else cart[pid] = qty;
+    renderProducts(); renderCartBar();
+  }
+
+  document.getElementById('prodList').addEventListener('click', function(e){
+    var b = e.target.closest('[data-act]'); if (!b) return;
+    var pid = b.dataset.pid, act = b.dataset.act;
+    var cur = cart[pid] || 0;
+    if (act === 'add' || act === 'inc') setQty(pid, cur + 1);
+    if (act === 'dec') setQty(pid, cur - 1);
+  });
+
+  // ---- steps ----
+  function showStep(n){
+    document.getElementById('step1').hidden = n !== 1;
+    document.getElementById('step2').hidden = n !== 2;
+    document.getElementById('step3').hidden = n !== 3;
+    document.getElementById('cartBar').hidden = n !== 1 || cartUnits() === 0;
+    document.getElementById('submitBar').hidden = n !== 2;
+    document.getElementById('signinNote').hidden = n === 3;
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }
+  document.getElementById('continueBtn').addEventListener('click', function(){
+    document.getElementById('submitTotal').textContent = money(cartTotal());
+    showStep(2);
+  });
+  document.getElementById('backToStep1').addEventListener('click', function(){ showStep(1); });
+
+  function showErr(msg){
+    var el = document.getElementById('formErr');
+    el.textContent = msg; el.style.display = msg ? 'block' : 'none';
+  }
+
+  document.getElementById('placeBtn').addEventListener('click', function(){
+    var name = document.getElementById('fName').value.trim();
+    var phone = document.getElementById('fPhone').value.trim();
+    var address = document.getElementById('fAddress').value.trim();
+    var area = document.getElementById('fArea').value.trim();
+    var note = document.getElementById('fNote').value.trim();
+    if (name.length < 2) return showErr('Please enter your name.');
+    if (phone.replace(/\D/g,'').length < 10) return showErr('Please enter a valid phone number.');
+    if (address.length < 5) return showErr('Please enter your delivery address.');
+    showErr('');
+    var btn = document.getElementById('placeBtn');
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Placing…';
+    var items = Object.keys(cart).map(function(pid){ return { product_id: Number(pid), qty: cart[pid] }; });
+    fetch('/api/public/order', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, phone: phone, address: address, area: area, notes: note, items: items, source: src }),
+    }).then(function(r){ return r.json().then(function(j){ return { ok: r.ok, body: j }; }); })
+      .then(function(res){
+        btn.disabled = false; btn.innerHTML = 'Place order';
+        if (!res.ok) return showErr(res.body && res.body.error || 'Something went wrong — please try again.');
+        document.getElementById('doneOrderId').textContent = '#' + res.body.id;
+        document.getElementById('doneOrderTotal').textContent = money(res.body.total);
+        document.getElementById('waBtn').href = 'https://wa.me/' + WA_NUMBER + '?text=' + encodeURIComponent('Hi PurePak, I just placed order #' + res.body.id + '.');
+        cart = {}; renderProducts(); renderCartBar();
+        showStep(3);
+      })
+      .catch(function(){
+        btn.disabled = false; btn.innerHTML = 'Place order';
+        showErr('Could not reach PurePak — check your connection and try again, or message us on WhatsApp.');
+      });
+  });
+
+  document.getElementById('newOrderBtn').addEventListener('click', function(){
+    document.getElementById('fName').value = '';
+    document.getElementById('fPhone').value = '';
+    document.getElementById('fAddress').value = '';
+    document.getElementById('fArea').value = '';
+    document.getElementById('fNote').value = '';
+    showStep(1);
+  });
+
+  // ---- boot ----
+  fetch('/api/public/products').then(function(r){ return r.json(); }).then(function(rows){
+    products = Array.isArray(rows) ? rows : [];
+    renderProducts(); renderCartBar();
+  }).catch(function(){
+    document.getElementById('prodList').innerHTML = '<div class="card" style="padding:20px;text-align:center;color:var(--ink-3)">Could not load the product list. Please refresh, or message us on WhatsApp.</div>';
+  });
+  showStep(1);
+})();
+</script>
+</body>
+</html>

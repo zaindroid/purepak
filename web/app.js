@@ -266,8 +266,11 @@ const App = {
       if (name === 'pricing' && typeof window.refreshStorefrontPrices === 'function') {
         window.refreshStorefrontPrices().catch(() => {});
       }
+      if (name === 'offer' && typeof window.refreshOfferBanner === 'function') {
+        window.refreshOfferBanner().catch(() => {});
+      }
     };
-    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer', 'commission'].forEach(ev =>
+    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer', 'commission', 'offer'].forEach(ev =>
       es.addEventListener(ev, () => onEvent(ev)));
     es.addEventListener('message', () => onEvent('message'));
     es.addEventListener('error', () => { /* EventSource auto-reconnects; no-op */ });
@@ -347,6 +350,8 @@ const App = {
       goto('team', 'profile');
     } else if (/^(product|pricing)#/.test(ref)) {
       goto('products', 'bookkeeping', 'home');
+    } else if (/^offer#/.test(ref)) {
+      goto('home', 'dashboard'); // the offer banner lives on the customer's Shop page
     }
     this.bellUpdate(true).catch(() => {});
   },
@@ -469,6 +474,22 @@ const App = {
         }
         break;
       case 'new-agent': stop(); modalAddAgent(); break;
+      case 'new-offer': stop(); modalNewOffer(); break;
+      case 'offer-toggle': stop(); {
+        const el = e.target.closest('[data-act="offer-toggle"]');
+        const active = el.dataset.active === '1';
+        try {
+          await API.updateOffer(+el.dataset.id, { active });
+          toast(active ? 'Offer turned on — broadcasting now' : 'Offer turned off', 'ok');
+          App.refresh();
+        } catch (err) { toast(err.message, 'bad'); }
+      } break;
+      case 'offer-delete': stop();
+        if (await confirmDialog({ title: 'Delete offer', message: 'This removes it for good — customers who already saw the notification keep it in their feed, but the banner disappears.', okLabel: 'Delete', danger: true })) {
+          try { await API.deleteOffer(+id); toast('Offer deleted'); App.refresh(); }
+          catch (e) { this.toast(e.message, 'bad'); }
+        }
+        break;
       case 'add-product': stop(); modalAddProduct(); break;
       case 'edit-product': stop(); modalEditProduct(+id); break;
       case 'toggle-product': stop(); {

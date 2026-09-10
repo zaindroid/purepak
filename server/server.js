@@ -574,6 +574,27 @@ function officeUserIds() {
   // company accounts + every agent's login — the people who act on orders/customers
   return db.prepare(`SELECT id FROM users WHERE status='active' AND (role IN ('admin','manager','shop_manager','finance') OR agent_id IS NOT NULL)`).all().map(r => r.id);
 }
+// offers currently live: active, and inside their (optional) start/end window
+function activeOffers() {
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  return db.prepare(`SELECT id, title, body FROM offers WHERE active=1
+                      AND (starts_at IS NULL OR starts_at <= ?)
+                      AND (ends_at IS NULL OR ends_at >= ?)
+                      ORDER BY id DESC`).all(now, now);
+}
+// notify every customer + nudge open storefronts/QR pages — but only if the
+// offer isn't scheduled to start later (a future-dated offer stays quiet
+// until its start time; there's no scheduler here, so it'll actually start
+// showing once someone loads the banner after that moment, just without the
+// push notification having fired yet)
+function broadcastOfferIfLive(offerId, title, body, startsAt, endsAt) {
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  if (startsAt && startsAt > now) return;
+  if (endsAt && endsAt < now) return;
+  const customerIds = db.prepare(`SELECT id FROM users WHERE role='customer' AND status='active'`).all().map(r => r.id);
+  notify(customerIds, 'offer', title, body, 'offer#' + offerId);
+  sseBroadcast('offer');
+}
 function sseOpen(userId, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -746,6 +767,69 @@ async function handleApi(req, res, url) {
     sseSendMany(officeUserIds(), 'order');
 
     return json(res, 201, { id: orderId, total });
+  }
+
+  // ---- public: active offers, for the guest QR page banner (no auth) ----
+  if (method === 'GET' && parts[1] === 'public' && parts[2] === 'offers') {
+    return json(res, 200, activeOffers());
+  }
+
+  // ---- offers / announcements: admin/manager broadcast a message to every
+  // customer (notification + storefront banner) — bundle deals, seasonal
+  // discounts, "free delivery this week". Purely a message: it does not
+  // touch pricing, which staff still change in Products & pricing. ----
+  if (method === 'GET' && parts[1] === 'offers' && parts[2] === 'active') {
+    if (!user) return err(res, 401, 'Not authenticated');
+    return json(res, 200, activeOffers());
+  }
+  if (method === 'GET' && parts[1] === 'offers' && parts.length === 2) {
+    requireRole(user, ['admin', 'manager']);
+    return json(res, 200, db.prepare('SELECT * FROM offers ORDER BY id DESC').all());
+  }
+  if (method === 'POST' && parts[1] === 'offers') {
+    requireRole(user, ['admin', 'manager']);
+    const b = await readBody(req);
+    const title = String(b.title || '').trim().slice(0, 100);
+    const body = String(b.body || '').trim().slice(0, 500);
+    if (title.length < 2) return err(res, 400, 'Please enter a title');
+    if (body.length < 2) return err(res, 400, 'Please enter a message');
+    const startsAt = b.starts_at ? String(b.starts_at).slice(0, 19).replace('T', ' ') : null;
+    const endsAt = b.ends_at ? String(b.ends_at).slice(0, 19).replace('T', ' ') : null;
+    const r = db.prepare(`INSERT INTO offers(title,body,active,starts_at,ends_at,created_by) VALUES (?,?,1,?,?,?)`)
+      .run(title, body, startsAt, endsAt, user.name);
+    const offerId = Number(r.lastInsertRowid);
+    audit(user, 'offer.create', 'offer', offerId, `New offer: ${title}`, null, { title, body, starts_at: startsAt, ends_at: endsAt });
+    broadcastOfferIfLive(offerId, title, body, startsAt, endsAt);
+    return json(res, 201, db.prepare('SELECT * FROM offers WHERE id=?').get(offerId));
+  }
+  if (method === 'PATCH' && parts[1] === 'offers' && parts.length === 3 && !isNaN(+parts[2])) {
+    requireRole(user, ['admin', 'manager']);
+    const oid = +parts[2];
+    const cur = db.prepare('SELECT * FROM offers WHERE id=?').get(oid);
+    if (!cur) return err(res, 404, 'Offer not found');
+    const b = await readBody(req);
+    const active = b.active !== undefined ? (b.active ? 1 : 0) : cur.active;
+    const title = b.title !== undefined ? (String(b.title).trim().slice(0, 100) || cur.title) : cur.title;
+    const body = b.body !== undefined ? (String(b.body).trim().slice(0, 500) || cur.body) : cur.body;
+    db.prepare('UPDATE offers SET active=?, title=?, body=? WHERE id=?').run(active, title, body, oid);
+    if (active && !cur.active) {
+      // re-activating is a deliberate re-announce, not a silent flip
+      broadcastOfferIfLive(oid, title, body, cur.starts_at, cur.ends_at);
+    } else {
+      sseBroadcast('offer'); // tell open storefronts/order pages to re-check the banner
+    }
+    audit(user, 'offer.update', 'offer', oid, `Offer ${active ? 'activated' : 'deactivated'}: ${title}`, { active: cur.active }, { active });
+    return json(res, 200, db.prepare('SELECT * FROM offers WHERE id=?').get(oid));
+  }
+  if (method === 'DELETE' && parts[1] === 'offers' && parts.length === 3 && !isNaN(+parts[2])) {
+    requireRole(user, ['admin', 'manager']);
+    const oid = +parts[2];
+    const cur = db.prepare('SELECT * FROM offers WHERE id=?').get(oid);
+    if (!cur) return err(res, 404, 'Offer not found');
+    db.prepare('DELETE FROM offers WHERE id=?').run(oid);
+    audit(user, 'offer.delete', 'offer', oid, `Offer removed: ${cur.title}`, cur, null);
+    sseBroadcast('offer');
+    return json(res, 200, { ok: true });
   }
 
   // ---- team / user management (admin + manager) ----

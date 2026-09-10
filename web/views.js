@@ -24,6 +24,7 @@ const IC = (() => {
     wallet: s('<rect x="2.5" y="6" width="19" height="14" rx="2.5"/><path d="M2.5 10h19"/><circle cx="16.5" cy="15" r="1.2" fill="currentColor" stroke="none"/>', 19),
     chat: s('<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>', 19),
     mail: s('<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7.5L12 13.5l8.5-6"/>', 19),
+    megaphone: s('<path d="M3 10v4a1.5 1.5 0 0 0 1.5 1.5H6l3 5.5v-6"/><path d="M6 10 17.5 4v16L6 14"/><path d="M20.5 9.5a4 4 0 0 1 0 5"/>', 19),
   };
 })();
 
@@ -970,6 +971,64 @@ async function viewBookkeeping() {
     </tbody></table></div></div>`;
 }
 
+// ---------- offers / announcements: broadcast a message to every customer as
+// a notification + a storefront banner (admin/manager). Doesn't touch pricing
+// — that's still Products & pricing; this is purely the messaging layer. ----------
+function offerStatus(o) {
+  if (!o.active) return { label: 'Off', cls: 'cancelled' };
+  const now = new Date();
+  if (o.starts_at && new Date(o.starts_at.replace(' ', 'T')) > now) return { label: 'Scheduled', cls: 'pending' };
+  if (o.ends_at && new Date(o.ends_at.replace(' ', 'T')) < now) return { label: 'Expired', cls: 'cancelled' };
+  return { label: 'Live', cls: 'approved' };
+}
+async function viewOffers() {
+  const offers = await API.offers();
+  return `
+  <div class="page-head"><h1>Offers</h1><button class="btn primary sm" data-act="new-offer">+ New offer</button></div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Broadcasts a notification and a storefront banner to every customer — and shows on the QR ordering page too. It's just a message: prices don't change here, set those in <b>Products</b>.</p>
+  ${offers.map(o => {
+    const st = offerStatus(o);
+    return `<div class="team-row">
+      <div class="team-av">${IC.megaphone}</div>
+      <div class="team-main">
+        <div class="nm">${API.esc(o.title)} <span class="chip ${st.cls}">${st.label}</span></div>
+        <div class="sub">${API.esc(o.body)}</div>
+        <div class="muted" style="font-size:11px;margin-top:3px">by ${API.esc(o.created_by || '—')} · ${API.fmtDay(o.created_at)}${o.ends_at ? ' · ends ' + API.fmtDay(o.ends_at) : ''}</div>
+      </div>
+      <div class="team-acts" style="flex:none">
+        <button class="btn ghost sm" data-act="offer-toggle" data-id="${o.id}" data-active="${o.active ? 0 : 1}">${o.active ? 'Turn off' : 'Turn on'}</button>
+        <button class="btn ghost sm" data-act="offer-delete" data-id="${o.id}">Delete</button>
+      </div>
+    </div>`;
+  }).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.megaphone}</div>No offers yet — "+ New offer" announces something to every customer.</div>`}`;
+}
+function modalNewOffer() {
+  openModal('New offer', `
+    <div class="modal-bd">
+      <label class="muted">Title</label>
+      <input id="ofTitle" class="input" style="width:100%;margin-bottom:10px" placeholder="e.g. Ramadan bundle — 19L x3 for Rs 280" maxlength="100">
+      <label class="muted">Message</label>
+      <textarea id="ofBody" class="input" style="width:100%;margin-bottom:10px;min-height:80px" placeholder="What's the offer? Keep it short and clear." maxlength="500"></textarea>
+      <label class="muted">Ends on (optional)</label>
+      <input id="ofEnds" type="date" class="input" style="width:100%">
+      <p class="muted" style="font-size:11.5px;margin-top:10px">Broadcasts immediately to every active customer and shows as a banner on the Shop page and the QR ordering page until you turn it off (or the end date passes).</p>
+    </div>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button>
+     <button class="btn primary" id="ofSubmit">Broadcast now</button>`);
+  document.getElementById('ofSubmit').addEventListener('click', async () => {
+    const title = document.getElementById('ofTitle').value.trim();
+    const body = document.getElementById('ofBody').value.trim();
+    const ends = document.getElementById('ofEnds').value;
+    if (title.length < 2 || body.length < 2) { toast('Add a title and a message', 'warn'); return; }
+    try {
+      await API.createOffer({ title, body, ends_at: ends ? ends + ' 23:59:59' : null });
+      closeModal();
+      toast('Offer broadcast to every customer', 'ok');
+      App.refresh();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+}
+
 // ---------- payment methods: the business's receiving accounts (admin/manager) ----------
 async function viewPayments() {
   const canEdit = ['admin', 'manager'].includes(API.user.role);
@@ -1006,6 +1065,7 @@ async function viewAudit() {
   const actionLabel = {
     'ledger.create': 'Ledger entry', 'ledger.void': 'Entry voided', 'ledger.correct': 'Entry corrected',
     'order.pay': 'Order payment', 'commission.settle': 'Commission settled', 'payroll.pay': 'Payroll paid', 'receipt.post': 'Receipt posted',
+    'offer.create': 'Offer broadcast', 'offer.update': 'Offer updated', 'offer.delete': 'Offer removed',
   };
   // Human field-level diff. Creates/deletes are described by e.summary already,
   // so only render this for genuine before→after changes.
@@ -1143,12 +1203,51 @@ async function refreshStorefrontPrices() {
 }
 window.refreshStorefrontPrices = refreshStorefrontPrices; // called from app.js on a 'pricing' SSE event
 
+// ---- offer banner (broadcasts from the Offers admin page) ----
+// dismissed per-browser via localStorage, not server-side — good enough for
+// "don't nag them again on this phone", no account bookkeeping needed
+function dismissedOfferIds() {
+  try { return JSON.parse(localStorage.getItem('pp_offers_dismissed') || '[]'); } catch { return []; }
+}
+function offerBannerHtml(offers) {
+  const dismissed = new Set(dismissedOfferIds());
+  const visible = offers.filter(o => !dismissed.has(o.id));
+  if (!visible.length) return '';
+  return `<section class="offer-banner" id="offerBanner">${visible.map(o => `
+    <div class="offer-card" data-offer-id="${o.id}">
+      <div class="offer-ic">${IC.megaphone}</div>
+      <div class="offer-txt"><b>${API.esc(o.title)}</b><span>${API.esc(o.body)}</span></div>
+      <button class="offer-close" data-offer-dismiss="${o.id}" aria-label="Dismiss">&times;</button>
+    </div>`).join('')}</section>`;
+}
+function dismissOffer(id) {
+  try {
+    const seen = dismissedOfferIds();
+    if (!seen.includes(id)) { seen.push(id); localStorage.setItem('pp_offers_dismissed', JSON.stringify(seen)); }
+  } catch {}
+  const card = document.querySelector(`.offer-card[data-offer-id="${id}"]`);
+  const banner = document.getElementById('offerBanner');
+  card?.remove();
+  if (banner && !banner.querySelector('.offer-card')) banner.remove();
+}
+// surgical refresh on a live 'offer' SSE event — no full page re-render
+async function refreshOfferBanner() {
+  if (!window.App || App.route !== 'home') return;
+  let offers;
+  try { offers = await API.activeOffers(); } catch { return; }
+  const html = offerBannerHtml(offers);
+  const existing = document.getElementById('offerBanner');
+  if (existing) { if (html) existing.outerHTML = html; else existing.remove(); }
+  else if (html) document.querySelector('.shop-hero')?.insertAdjacentHTML('afterend', html);
+}
+window.refreshOfferBanner = refreshOfferBanner; // called from app.js on an 'offer' SSE event
+
 // in-memory basket for the shop; survives SSE-driven re-renders of the page
 const shopCart = new Map(); // productId -> qty
 let _shopWired = false;
 
 async function viewCustomerHome() {
-  const [k, orders, products] = await Promise.all([API.kpis(), API.orders(), API.products()]);
+  const [k, orders, products, offers] = await Promise.all([API.kpis(), API.orders(), API.products(), API.activeOffers().catch(() => [])]);
   const first = API.esc((API.user.name || '').split(' ')[0] || 'there');
   // "most popular" = the office dispenser bottle (19 L), else the biggest size
   const popId = (products.find(p => p.size_ml === 19000) || products.slice().sort((a, b) => b.size_ml - a.size_ml)[0] || {}).id;
@@ -1190,6 +1289,8 @@ async function viewCustomerHome() {
       <div>${IC.shield}<span>Lab-tested water</span></div>
     </div>
   </section>
+
+  ${offerBannerHtml(offers)}
 
   ${k.due > 0 ? `
   <button class="due-nudge" data-act="nav" data-to="orders">
@@ -1349,6 +1450,10 @@ function initCustomerHome() {
   if (_shopWired) return;
   _shopWired = true;
   document.getElementById('view').addEventListener('click', onShopClick);
+  document.getElementById('view').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-offer-dismiss]');
+    if (b) dismissOffer(+b.dataset.offerDismiss);
+  });
 }
 
 // full contact details, opened from the storefront "Contact us" button
@@ -2190,6 +2295,7 @@ const ADMIN_NAV = [
   { to: 'route', icon: IC.route, label: 'Route map' },
   { to: 'customers', icon: IC.users, label: 'Customers', section: 'Sales' },
   { to: 'agents', icon: IC.badge, label: 'Agents & commissions' },
+  { to: 'offers', icon: IC.megaphone, label: 'Offers' },
   { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping', section: 'Finance' },
   { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
   { to: 'payments', icon: IC.wallet, label: 'Payment methods' },
@@ -2247,7 +2353,7 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
+    agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },
@@ -2255,7 +2361,7 @@ const VIEW = {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
     customers: viewCustomers,
-    agents: viewAgents, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
+    agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts,
   },

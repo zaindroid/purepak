@@ -25,6 +25,7 @@ const API = (() => {
   const g = p => req('GET', p);
   const post = (p, b) => req('POST', p, b);
   const patch = (p, b) => req('PATCH', p, b);
+  const del = p => req('DELETE', p);
 
   const fmtMoney = (n, cur = 'Rs') => {
     const v = Number(n) || 0;
@@ -74,6 +75,11 @@ const API = (() => {
     updateOrder: (id, b) => patch('/orders/' + id, b),
     paymentMethods: () => g('/payment-methods'),
     savePaymentAccounts: (accounts) => post('/payment-methods', { accounts }),
+    offers: () => g('/offers'),
+    activeOffers: () => g('/offers/active'),
+    createOffer: (b) => post('/offers', b),
+    updateOffer: (id, b) => patch('/offers/' + id, b),
+    deleteOffer: (id) => del('/offers/' + id),
     deliveries: (status) => g('/deliveries' + (status ? '?status=' + status : '')),
     delivery: (id) => g('/deliveries/' + id),
     updateDelivery: (id, b) => patch('/deliveries/' + id, b),

@@ -229,6 +229,21 @@ function migrate(db) {
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- broadcast offers/announcements: a message pushed to every customer as a
+  -- notification + a storefront banner (bundle deals, seasonal discounts,
+  -- "free delivery this week" — whatever the business wants to announce).
+  -- Not tied into pricing; staff still change actual prices in Products.
+  CREATE TABLE IF NOT EXISTS offers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    starts_at TEXT,
+    ends_at TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
   `);
   // light migrations for existing databases
   const cols = db.prepare(`PRAGMA table_info(customers)`).all().map(c => c.name);

@@ -560,6 +560,16 @@ body.has-cartbar .shop{padding-bottom:150px}
 .due-nudge b{font-weight:800}
 .due-nudge .dn-go{font-weight:700;white-space:nowrap;opacity:.9}
 
+.offer-banner{display:flex;flex-direction:column;gap:8px;margin:14px 0}
+.offer-card{display:flex;align-items:flex-start;gap:10px;background:var(--teal-bg);border:1px solid #b9e8d6;
+  border-radius:12px;padding:11px 12px;animation:rowIn .4s var(--ease) backwards}
+.offer-ic{flex:none;width:30px;height:30px;border-radius:9px;background:#fff;color:var(--teal-ink);display:grid;place-items:center}
+.offer-txt{flex:1;min-width:0;font-size:12.5px;color:var(--teal-ink);line-height:1.4}
+.offer-txt b{display:block;font-size:13.5px;font-weight:800;margin-bottom:2px}
+.offer-close{flex:none;width:22px;height:22px;border:none;background:transparent;color:var(--teal-ink);
+  opacity:.6;font-size:16px;line-height:1;cursor:pointer;border-radius:6px}
+.offer-close:hover{opacity:1;background:rgba(255,255,255,.5)}
+
 .reorder{
   display:flex;align-items:center;gap:12px;
   background:var(--grad-water-soft);border:1px solid #cfe6fb;border-radius:12px;

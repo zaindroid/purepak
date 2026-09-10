@@ -36,20 +36,21 @@
   .trust svg{width:14px;height:14px;flex:none;opacity:.95}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
   .sec-t{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);margin:20px 0 10px}
-  .prod{position:relative;display:flex;align-items:center;gap:13px;padding:12px;border:1px solid var(--line);border-radius:16px;
-    background:#fff;margin-bottom:10px;box-shadow:0 1px 2px rgba(16,42,83,.04);transition:border-color .15s,box-shadow .15s}
-  .prod.in-cart{border-color:var(--blue-500);box-shadow:0 2px 10px rgba(33,150,243,.12)}
-  .prod-img{width:58px;height:70px;flex:none;border-radius:12px;background:radial-gradient(circle at 50% 35%,var(--blue-50) 0%,#fff 72%);
+  .prod{position:relative;display:flex;gap:14px;padding:14px;border:1px solid var(--line);border-radius:18px;
+    background:#fff;margin-bottom:12px;box-shadow:0 1px 3px rgba(16,42,83,.05);transition:border-color .15s,box-shadow .15s}
+  .prod.in-cart{border-color:var(--blue-500);box-shadow:0 3px 14px rgba(33,150,243,.14)}
+  .prod-img{width:96px;height:116px;flex:none;border-radius:14px;background:radial-gradient(circle at 50% 32%,var(--blue-50) 0%,#fff 75%);
     display:grid;place-items:center;overflow:hidden}
-  .prod-img img{width:100%;height:100%;object-fit:contain;display:block}
-  .prod-pop{position:absolute;top:-8px;left:10px;background:var(--grad-water);color:#fff;font-size:9.5px;font-weight:800;
-    letter-spacing:.03em;text-transform:uppercase;padding:3px 8px;border-radius:999px;box-shadow:0 2px 6px rgba(25,118,210,.3)}
-  .prod-main{flex:1;min-width:0}
-  .prod-nm{font-weight:800;font-size:14.5px;letter-spacing:-.1px}
-  .prod-sz{font-size:11.5px;color:var(--ink-3);margin-top:1px}
-  .prod-pr{font-size:13px;margin-top:4px}
-  .prod-pr b{color:var(--blue-800);font-weight:800;font-size:15px}
-  .prod-pr span{color:var(--ink-3);font-size:11.5px}
+  .prod-img img{width:88%;height:88%;object-fit:contain;display:block}
+  .prod-pop{position:absolute;top:-8px;left:14px;background:var(--grad-water);color:#fff;font-size:9.5px;font-weight:800;
+    letter-spacing:.03em;text-transform:uppercase;padding:3px 9px;border-radius:999px;box-shadow:0 2px 6px rgba(25,118,210,.3);z-index:1}
+  .prod-body{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:14px}
+  .prod-nm{font-weight:800;font-size:15.5px;letter-spacing:-.1px;line-height:1.25}
+  .prod-sz{font-size:12px;color:var(--ink-3);margin-top:2px}
+  .prod-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
+  .prod-pr{font-size:13px}
+  .prod-pr b{color:var(--blue-800);font-weight:800;font-size:17px}
+  .prod-pr span{color:var(--ink-3);font-size:11.5px;display:block;margin-top:-2px}
   .stepper{display:flex;align-items:center;gap:0;flex:none;background:var(--blue-50);border-radius:10px;padding:2px}
   .stepper button{width:30px;height:30px;border-radius:8px;border:none;background:transparent;font-size:17px;font-weight:700;color:var(--blue-700);display:grid;place-items:center;cursor:pointer}
   .stepper button:active{background:#fff}
@@ -208,11 +209,15 @@
       return '<div class="prod'+(qty>0?' in-cart':'')+'" data-pid="'+p.id+'">' +
         (p.id === popId ? '<span class="prod-pop">Popular</span>' : '') +
         '<div class="prod-img">'+(img ? '<img src="img/'+img+'" alt="'+esc(p.name)+'" width="160" height="160" loading="lazy">' : '')+'</div>' +
-        '<div class="prod-main"><div class="prod-nm">'+esc(p.name)+'</div><div class="prod-sz">'+sizeLabel(p.size_ml)+' bottle</div>' +
-        '<div class="prod-pr"><b>'+money(p.price)+'</b><span> / bottle</span></div></div>' +
-        (qty > 0
-          ? '<div class="stepper"><button data-act="dec" data-pid="'+p.id+'">−</button><span class="qty">'+qty+'</span><button data-act="inc" data-pid="'+p.id+'">+</button></div>'
-          : '<button class="addbtn" data-act="add" data-pid="'+p.id+'">Add</button>') +
+        '<div class="prod-body">' +
+          '<div><div class="prod-nm">'+esc(p.name)+'</div><div class="prod-sz">'+sizeLabel(p.size_ml)+' bottle</div></div>' +
+          '<div class="prod-foot">' +
+            '<div class="prod-pr"><b>'+money(p.price)+'</b><span>/ bottle</span></div>' +
+            (qty > 0
+              ? '<div class="stepper"><button data-act="dec" data-pid="'+p.id+'">−</button><span class="qty">'+qty+'</span><button data-act="inc" data-pid="'+p.id+'">+</button></div>'
+              : '<button class="addbtn" data-act="add" data-pid="'+p.id+'">Add</button>') +
+          '</div>' +
+        '</div>' +
         '</div>';
     }).join('');
   }

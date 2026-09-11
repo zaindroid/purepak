@@ -40,7 +40,8 @@ import java.util.Locale;
 
 /**
  * Hosts the PurePak web dashboard in a native WebView.
- * - Stores/retrieves the server host chosen in SetupActivity
+ * - Resolves which server to load via RemoteConfig (auto) or a manual
+ *   override saved in SetupActivity (advanced/local-dev use only)
  * - JS bridge window.PurePak for app-side hooks (toast, settings)
  * - Native back button => in-page history, then exit
  * - Geolocation (rider GPS for smart route) + file/camera picker (receipt scanning)
@@ -54,7 +55,6 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar pb;
     private View splashOverlay;
     private boolean splashHidden = false;
-    private String host = "";
     private String serverHost = "";
     private int serverPort = 80;
 
@@ -84,20 +84,6 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-        SharedPreferences sp = getSharedPreferences(SetupActivity.PREFS, MODE_PRIVATE);
-        host = sp.getString(SetupActivity.KEY_HOST, "");
-        if (host.isEmpty()) {
-            Intent i = new Intent(this, SetupActivity.class);
-            i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-            startActivity(i);
-            finish();
-            return;
-        }
-        final String base = SetupActivity.hostToUrl(host);
-        Uri bu = Uri.parse(base);
-        serverHost = bu.getHost() == null ? "" : bu.getHost();
-        serverPort = bu.getPort() != -1 ? bu.getPort() : ("https".equals(bu.getScheme()) ? 443 : 80);
 
         web = findViewById(R.id.web);
         pb = findViewById(R.id.pbLoad);
@@ -234,10 +220,32 @@ public class MainActivity extends AppCompatActivity {
         // location permission — needed before GPS works for the smart route
         ensureLocationPermission();
 
-        web.loadUrl(base);
+        // Resolve which server to load. A manual override (set via the
+        // Settings gear, e.g. for local dev on the same Wi-Fi) always wins;
+        // otherwise we ask the live pointer for the current address on every
+        // launch, so moving the backend to a new domain later needs no app
+        // update — see RemoteConfig.
+        SharedPreferences sp = getSharedPreferences(SetupActivity.PREFS, MODE_PRIVATE);
+        String cached = sp.getString(SetupActivity.KEY_HOST, "");
+        boolean manual = sp.getBoolean(SetupActivity.KEY_MANUAL, false);
+        if (manual && !cached.isEmpty()) {
+            startWithHost(cached);
+        } else {
+            RemoteConfig.resolve(cached, resolved -> {
+                if (!resolved.equals(cached)) sp.edit().putString(SetupActivity.KEY_HOST, resolved).apply();
+                startWithHost(resolved);
+            });
+        }
 
         // Safety: never leave the user stuck on the splash if the page stalls.
         splashOverlay.postDelayed(this::dismissSplash, SPLASH_MAX_MS);
+    }
+
+    private void startWithHost(String base) {
+        Uri bu = Uri.parse(base);
+        serverHost = bu.getHost() == null ? "" : bu.getHost();
+        serverPort = bu.getPort() != -1 ? bu.getPort() : ("https".equals(bu.getScheme()) ? 443 : 80);
+        web.loadUrl(base);
     }
 
     private void ensureLocationPermission() {
@@ -341,7 +349,7 @@ public class MainActivity extends AppCompatActivity {
 
         @android.webkit.JavascriptInterface
         public String version() {
-            return "1.5";
+            return "1.6";
         }
     }
 }

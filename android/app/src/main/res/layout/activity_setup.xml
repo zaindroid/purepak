@@ -82,4 +82,13 @@
         android:gravity="center"
         android:visibility="gone" />
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnUseDefault"
+        style="@style/Widget.MaterialComponents.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/use_default"
+        android:textAllCaps="false"
+        android:layout_marginTop="8dp" />
+
 </LinearLayout>

@@ -1,0 +1,4 @@
+{
+  "server_url": "https://purepak.zaindroid.me",
+  "note": "Read by the PurePak Android/iOS apps on every launch to find the backend. To move the backend to a new domain, change server_url here and push to main — every installed app picks up the new address automatically, with no app update needed. Keep this file's path (mobile-config.json at the repo root) and key name stable, since the app fetches it by exact URL."
+}

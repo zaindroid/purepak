@@ -176,7 +176,8 @@ async function loadOrderForm(prefill = {}) {
   return products.map((p, i) => {
     const it = items[i] || { product_id: p.id, qty: 1 };
     const unit = (typeof p.effective_price === 'number') ? p.effective_price : p.price;
-    return `<div class="field"><span>${API.esc(p.name)}</span>
+    const img = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) : null);
+    return `<div class="field"><span class="item-line-lbl">${img ? `<img class="item-thumb" src="${img}" alt="" loading="lazy">` : ''}${API.esc(p.name)}</span>
       <div class="row2"><input type="number" min="0" step="1" data-itemqty="${p.id}" value="${it.qty || 0}">
       <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / each</div></div></div>
     </div>`;
@@ -1171,6 +1172,19 @@ const sizeLabel = (ml) => ml >= 1000
   ? (Number.isInteger(ml / 1000) ? ml / 1000 : (ml / 1000).toFixed(1)) + ' L'
   : ml + ' ml';
 
+// real bottle photography, keyed by size — falls back to an icon (IC.bottle*)
+// wherever a product's size doesn't match one of our stocked shots
+const BOTTLE_IMG = { 500: 'bottle-500ml.png', 1500: 'bottle-1.5l.png', 6000: 'bottle-6l.png', 12000: 'bottle-12l.png', 19000: 'bottle-19l.png' };
+const bottleImg = (ml) => BOTTLE_IMG[ml] || null;
+// prefer an admin-uploaded photo (p.image_url, an absolute server path) over
+// the bundled stock bottle shot, and fall back to an icon if neither exists
+function bottleThumb(p, fallbackIcon) {
+  const src = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) : null);
+  return src
+    ? `<img src="${src}" alt="${API.esc(p.name)}" loading="lazy">`
+    : fallbackIcon;
+}
+
 const prodEff = (p) => (typeof p.effective_price === 'number' ? p.effective_price : p.price);
 function prodPriceHtml(p) {
   const eff = prodEff(p);
@@ -1256,7 +1270,7 @@ async function viewCustomerHome() {
   const card = (p) => `
     <article class="prod${p.id === popId ? ' is-pop' : ''}" data-pid="${p.id}" data-price="${prodEff(p)}">
       ${p.id === popId ? `<span class="prod-pop">Popular</span>` : ''}
-      <div class="prod-ic">${p.size_ml >= 6000 ? IC.bottleBig : IC.bottle}</div>
+      <div class="prod-ic">${bottleThumb(p, p.size_ml >= 6000 ? IC.bottleBig : IC.bottle)}</div>
       <div class="prod-main">
         <div class="prod-nm">${API.esc(p.name)}</div>
         <div class="prod-sz">${sizeLabel(p.size_ml)} bottle</div>
@@ -2200,7 +2214,7 @@ async function viewProducts() {
     <div class="card" style="margin-bottom:16px"><div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Product</th><th class="num">Size</th><th class="num">Base price</th><th>Status</th>${canEdit ? '<th></th>' : ''}</tr></thead>
       <tbody>${ps.map(p => `<tr style="${p.active ? '' : 'opacity:.55'}">
-        <td class="cell-main" data-l="Product">${API.esc(p.name)}${p.active ? '' : ' <span class="chip cancelled">Paused</span>'}</td>
+        <td class="cell-main" data-l="Product"><div class="prod-row-lbl">${bottleThumb(p, IC.bottle)}<span>${API.esc(p.name)}${p.active ? '' : ' <span class="chip cancelled">Paused</span>'}</span></div></td>
         ${V.m('Size', sizeLabel(p.size_ml), 'tv num')}
         ${V.m('Price', API.fmtMoney(p.price), 'tv num')}
         ${V.m('Status', p.active ? '<span class="chip approved">Active</span>' : '<span class="chip cancelled">Off</span>', '')}
@@ -2226,7 +2240,38 @@ async function viewProducts() {
     </div>` : ''}`;
 }
 
+// shared photo picker used by both Add and Edit product — a click-to-choose
+// preview box; picking a file downscales it (fileToDataUrl) and swaps the
+// preview in place. Returns the markup; call wirePhotoPicker(prefix, onPick)
+// after the modal is in the DOM to hook it up.
+function photoPickerHtml(prefix, existingUrl) {
+  return `
+    <label class="muted">Photo</label>
+    <div id="${prefix}PhotoBox" class="photo-pick">
+      ${existingUrl ? `<img id="${prefix}PhotoPrev" src="${existingUrl}" alt="">` : `<span id="${prefix}PhotoPrev" class="photo-pick-ph">${IC.bottle}</span>`}
+      <div class="photo-pick-txt"><b>${existingUrl ? 'Change photo' : 'Add a photo'}</b><span>JPG or PNG, shown to customers</span></div>
+    </div>
+    <input type="file" id="${prefix}PhotoInput" accept="image/*" hidden>`;
+}
+function wirePhotoPicker(prefix, state) {
+  const box = document.getElementById(prefix + 'PhotoBox');
+  const input = document.getElementById(prefix + 'PhotoInput');
+  box.addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const { dataUrl, mimetype } = await fileToDataUrl(file, 800);
+      state.image = dataUrl; state.mimetype = mimetype;
+      const prev = document.getElementById(prefix + 'PhotoPrev');
+      prev.outerHTML = `<img id="${prefix}PhotoPrev" src="${dataUrl}" alt="">`;
+      box.querySelector('.photo-pick-txt b').textContent = 'Change photo';
+    } catch { toast('Could not read that image', 'warn'); }
+  });
+}
+
 function modalAddProduct() {
+  const state = {};
   openModal('Add product', `
     <div class="modal-bd">
       <label class="muted">Name</label>
@@ -2235,14 +2280,20 @@ function modalAddProduct() {
         <div><label class="muted">Size (ml)</label><input id="prSize" class="input" style="width:100%" type="number" min="0" placeholder="2000"></div>
         <div><label class="muted">Base price (Rs)</label><input id="prPrice" class="input" style="width:100%" type="number" min="0" step="0.5" placeholder="25"></div>
       </div>
+      <label class="muted">Description (optional)</label>
+      <textarea id="prDesc" class="input" style="width:100%;margin-bottom:10px;min-height:60px;resize:vertical" placeholder="What makes this bottle worth ordering — shown on the shop and order page"></textarea>
+      ${photoPickerHtml('pr')}
     </div>`,
     `<button class="btn ghost" data-close-modal>Cancel</button>
      <button class="btn primary" id="prSubmit">Add product</button>`);
+  wirePhotoPicker('pr', state);
   document.getElementById('prSubmit').addEventListener('click', async () => {
     const b = {
       name: document.getElementById('prName').value.trim(),
       size_ml: Number(document.getElementById('prSize').value),
       price: Number(document.getElementById('prPrice').value),
+      description: document.getElementById('prDesc').value.trim() || undefined,
+      image: state.image, mimetype: state.mimetype,
     };
     if (!b.name || !(b.size_ml > 0) || !(b.price >= 0)) { toast('Fill in name, size and price', 'warn'); return; }
     try {
@@ -2258,6 +2309,7 @@ function modalEditProduct(id) {
   API.products().then(ps => {
     const p = ps.find(x => x.id === id);
     if (!p) return;
+    const state = {};
     openModal('Edit product — ' + API.esc(p.name), `
       <div class="modal-bd">
         <label class="muted">Name</label>
@@ -2266,16 +2318,22 @@ function modalEditProduct(id) {
           <div><label class="muted">Size (ml)</label><input id="epSize" class="input" style="width:100%" type="number" min="0" value="${p.size_ml}"></div>
           <div><label class="muted">Base price (Rs)</label><input id="epPrice" class="input" style="width:100%" type="number" min="0" step="0.5" value="${p.price}"></div>
         </div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" id="epActive" ${p.active ? 'checked' : ''} style="width:auto"> Available for ordering</label>
+        <label class="muted">Description (optional)</label>
+        <textarea id="epDesc" class="input" style="width:100%;margin-bottom:10px;min-height:60px;resize:vertical" placeholder="What makes this bottle worth ordering — shown on the shop and order page">${API.esc(p.description || '')}</textarea>
+        ${photoPickerHtml('ep', p.image_url)}
+        <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" id="epActive" ${p.active ? 'checked' : ''} style="width:auto"> Available for ordering</label>
       </div>`,
       `<button class="btn ghost" data-close-modal>Cancel</button>
        <button class="btn primary" id="epSave">Save</button>`);
+    wirePhotoPicker('ep', state);
     document.getElementById('epSave').addEventListener('click', async () => {
       const b = {
         name: document.getElementById('epName').value.trim(),
         size_ml: Number(document.getElementById('epSize').value),
         price: Number(document.getElementById('epPrice').value),
+        description: document.getElementById('epDesc').value.trim(),
         active: document.getElementById('epActive').checked,
+        image: state.image, mimetype: state.mimetype,
       };
       try {
         await API.updateProduct(id, b);

@@ -137,6 +137,9 @@ table.tbl{width:100%;border-collapse:collapse;min-width:640px}
 .tbl tr:hover td{background:var(--blue-50)}
 .tbl .num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
 .tbl .muted{color:var(--ink-3);font-size:12.5px}
+.prod-row-lbl{display:flex;align-items:center;gap:10px}
+.prod-row-lbl img{width:30px;height:30px;object-fit:contain;flex:none;background:var(--blue-50);border-radius:7px;padding:3px}
+.prod-row-lbl svg{width:30px;height:30px;flex:none;color:var(--blue-700);background:var(--blue-50);border-radius:7px;padding:5px;box-sizing:border-box}
 
 /* desktop two-column grids */
 .grid-2col{grid-template-columns:1.4fr 1fr}
@@ -298,6 +301,8 @@ table.matrix .base{color:var(--ink-3);font-size:11px}
 /* fields */
 .field{display:block;margin-bottom:12px}
 .field>span{display:block;font-size:12.5px;font-weight:600;color:var(--ink-2);margin-bottom:5px}
+.item-line-lbl{display:flex!important;align-items:center;gap:8px}
+.item-thumb{width:26px;height:26px;object-fit:contain;flex:none;background:var(--blue-50);border-radius:6px;padding:2px}
 .field input,.field select,.field textarea{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);outline:none}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--blue-500);box-shadow:0 0 0 3px var(--blue-100)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -318,6 +323,15 @@ table.matrix .base{color:var(--ink-3);font-size:11px}
 .modal-hd .x{margin-left:auto;width:32px;height:32px;border-radius:9px;font-size:17px;color:var(--ink-3);display:grid;place-items:center}
 .modal-bd{padding:16px 18px;overflow-y:auto;flex:1 1 auto}
 .modal-ft{padding:14px 18px;border-top:1px solid var(--line-2);display:flex;gap:10px;justify-content:flex-end;flex:none;background:#fff}
+
+/* product-photo picker (Add/Edit product modals) */
+.photo-pick{display:flex;align-items:center;gap:12px;padding:10px;border:1.5px dashed var(--line);border-radius:12px;cursor:pointer;transition:border-color .15s}
+.photo-pick:hover{border-color:var(--blue-500)}
+.photo-pick img,.photo-pick-ph{width:56px;height:56px;flex:none;border-radius:10px;object-fit:contain;background:var(--blue-50);display:grid;place-items:center;color:var(--blue-700)}
+.photo-pick-ph svg{width:26px;height:26px}
+.photo-pick-txt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.photo-pick-txt b{font-size:13px}
+.photo-pick-txt span{font-size:11.5px;color:var(--ink-3)}
 
 /* toast */
 .toast-root{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center}
@@ -602,10 +616,12 @@ body.has-cartbar .shop{padding-bottom:150px}
   text-transform:uppercase;padding:3px 9px;border-radius:0 14px 0 10px;
 }
 .prod-ic{
-  width:38px;height:38px;flex:none;border-radius:10px;display:grid;place-items:center;
-  background:var(--blue-50);color:var(--blue-700);margin-bottom:10px;
+  width:100%;height:88px;flex:none;border-radius:10px;display:grid;place-items:center;
+  background:radial-gradient(circle at 50% 30%,var(--blue-50) 0%,var(--card) 72%);color:var(--blue-700);margin-bottom:10px;
+  overflow:hidden;
 }
-.prod-ic svg{width:21px;height:21px}
+.prod-ic svg{width:26px;height:26px}
+.prod-ic img{width:auto;height:100%;max-width:100%;object-fit:contain;display:block}
 .prod-main{display:flex;flex-direction:column;flex:1 1 auto} /* grows so CTA sits flush at the bottom */
 .prod-nm{font-weight:700;font-size:13px;line-height:1.3;letter-spacing:-.01em}
 .prod-sz{font-size:11px;color:var(--ink-3);margin-top:1px}
@@ -635,7 +651,7 @@ body.has-cartbar .shop{padding-bottom:150px}
 .prod-grid .prod:last-child:nth-child(odd){
   flex-basis:100%;max-width:100%;flex-direction:row;align-items:center;gap:14px;padding:14px 16px;
 }
-.prod-grid .prod:last-child:nth-child(odd) .prod-ic{width:44px;height:44px;margin-bottom:0}
+.prod-grid .prod:last-child:nth-child(odd) .prod-ic{width:72px;height:64px;flex:none;margin-bottom:0}
 .prod-grid .prod:last-child:nth-child(odd) .prod-ic svg{width:23px;height:23px}
 .prod-grid .prod:last-child:nth-child(odd) .prod-main{flex:1 1 auto;min-width:0}
 .prod-grid .prod:last-child:nth-child(odd) .prod-pricing{margin-top:4px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}

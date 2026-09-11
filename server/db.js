@@ -251,6 +251,9 @@ function migrate(db) {
   if (!cols.includes('lng')) db.exec('ALTER TABLE customers ADD COLUMN lng REAL');
   if (!cols.includes('type')) db.exec(`ALTER TABLE customers ADD COLUMN type TEXT NOT NULL DEFAULT 'retail'`);
 
+  const pcols = db.prepare(`PRAGMA table_info(products)`).all().map(c => c.name);
+  if (!pcols.includes('image_url')) db.exec('ALTER TABLE products ADD COLUMN image_url TEXT');
+
   const ucols = db.prepare(`PRAGMA table_info(users)`).all().map(c => c.name);
   if (!ucols.includes('salary')) db.exec('ALTER TABLE users ADD COLUMN salary REAL');
   if (!ucols.includes('status')) db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled'))`);

@@ -12,6 +12,9 @@ const WEB_ROOT = path.join(__dirname, '..', 'web');
 // SAME path must be used to write, read and delete them, or images 404.
 const DATA_DIR = process.env.PUREPAK_DATA_DIR || path.join(__dirname, 'data');
 const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
+// admin-uploaded product photos — same persistent-volume reasoning as receipts;
+// the stock bottle shots that ship in web/img/ are separate and never touch this dir
+const PRODUCT_IMG_DIR = path.join(DATA_DIR, 'product-images');
 const SESSIONS = new Map(); // token -> {user, createdAt}
 // Public guest-order rate limiting (the QR landing page has no auth at all) —
 // a coarse per-IP + per-phone throttle, not a CAPTCHA; enough to blunt casual
@@ -49,6 +52,19 @@ function decodeB64(data) {
   if (/^[A-Za-z0-9+/]+={0,2}$/.test(s) && s.length % 4 === 0) return Buffer.from(s, 'base64');
   return Buffer.from(String(data || ''), 'utf8');
 }
+// save an admin-uploaded product photo (base64) to the persistent data dir and
+// point the product row at it, cache-busted with the write time so a re-upload
+// shows up immediately instead of serving a stale cached image.
+function saveProductImage(pid, imageB64, mimetype) {
+  if (!fs.existsSync(PRODUCT_IMG_DIR)) fs.mkdirSync(PRODUCT_IMG_DIR, { recursive: true });
+  const ext = String(mimetype || '').includes('png') ? 'png' : (String(mimetype || '').includes('webp') ? 'webp' : 'jpg');
+  fs.readdirSync(PRODUCT_IMG_DIR).filter(f => f.startsWith('p' + pid + '.')).forEach(f => {
+    try { fs.unlinkSync(path.join(PRODUCT_IMG_DIR, f)); } catch {}
+  });
+  fs.writeFileSync(path.join(PRODUCT_IMG_DIR, 'p' + pid + '.' + ext), decodeB64(imageB64));
+  db.prepare('UPDATE products SET image_url=? WHERE id=?').run('/api/public/product-image/' + pid + '?v=' + Date.now(), pid);
+}
+
 // ---------- helpers ----------
 function json(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -694,8 +710,22 @@ async function handleApi(req, res, url) {
   // ---- public guest ordering: the QR-code landing page (/order) — no login,
   // no app, just name + phone + address + a basket. Powers order.html. ----
   if (method === 'GET' && parts[1] === 'public' && parts[2] === 'products') {
-    const rows = db.prepare('SELECT id, name, size_ml, price FROM products WHERE active=1 ORDER BY size_ml').all();
+    const rows = db.prepare('SELECT id, name, size_ml, price, image_url, description FROM products WHERE active=1 ORDER BY size_ml').all();
     return json(res, 200, rows);
+  }
+  // admin-uploaded product photo — public + unauthenticated so it can be used
+  // as a plain <img src> everywhere (the guest QR page included) and cached
+  // by the browser; cache-busted via the ?v= the upload itself sets.
+  if (method === 'GET' && parts[1] === 'public' && parts[2] === 'product-image' && parts.length === 4 && !isNaN(+parts[3])) {
+    const pid = +parts[3];
+    const dir = PRODUCT_IMG_DIR;
+    const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+    const f = files.find(x => x.startsWith('p' + pid + '.'));
+    if (!f) return err(res, 404, 'Image not found');
+    const buf = fs.readFileSync(path.join(dir, f));
+    const ct = f.endsWith('.png') ? 'image/png' : f.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+    res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'public, max-age=31536000, immutable' });
+    return res.end(buf);
   }
   if (method === 'POST' && parts[1] === 'public' && parts[2] === 'order') {
     const ip = clientIp(req);
@@ -966,14 +996,17 @@ async function handleApi(req, res, url) {
     if (!b.name || !(Number(b.size_ml) > 0) || !(Number(b.price) >= 0)) return err(res, 400, 'name, size_ml, price required');
     const r = db.prepare('INSERT INTO products(name,size_ml,price,description) VALUES (?,?,?,?)')
       .run(b.name, b.size_ml, b.price, b.description || null);
+    const pid = Number(r.lastInsertRowid);
+    if (b.image) saveProductImage(pid, b.image, b.mimetype);
     sseBroadcast('pricing'); // new product shows up on every open catalog/shop
-    return json(res, 201, db.prepare('SELECT * FROM products WHERE id=?').get(r.lastInsertRowid));
+    return json(res, 201, db.prepare('SELECT * FROM products WHERE id=?').get(pid));
   }
   if (method === 'PATCH' && parts[1] === 'products' && parts.length === 3 && !isNaN(+parts[2])) {
     requireRole(user, ['admin', 'manager']);
     const b = await readBody(req);
     const cur = db.prepare('SELECT * FROM products WHERE id=?').get(+parts[2]);
     if (!cur) return err(res, 404, 'Product not found');
+    if (b.image) saveProductImage(+parts[2], b.image, b.mimetype);
     db.prepare(`UPDATE products SET name=?, size_ml=?, price=?, description=?, active=? WHERE id=?`).run(
       b.name != null ? String(b.name).trim() || cur.name : cur.name,
       b.size_ml != null && Number(b.size_ml) > 0 ? Number(b.size_ml) : cur.size_ml,

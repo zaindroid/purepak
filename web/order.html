@@ -205,10 +205,10 @@
       products.slice().sort(function(a,b){ return b.size_ml - a.size_ml; })[0] || {}).id;
     list.innerHTML = products.map(function(p){
       var qty = cart[p.id] || 0;
-      var img = BOTTLE_IMG[p.size_ml];
+      var img = p.image_url || (BOTTLE_IMG[p.size_ml] ? 'img/'+BOTTLE_IMG[p.size_ml] : null);
       return '<div class="prod'+(qty>0?' in-cart':'')+'" data-pid="'+p.id+'">' +
         (p.id === popId ? '<span class="prod-pop">Popular</span>' : '') +
-        '<div class="prod-img">'+(img ? '<img src="img/'+img+'" alt="'+esc(p.name)+'" width="160" height="160" loading="lazy">' : '')+'</div>' +
+        '<div class="prod-img">'+(img ? '<img src="'+img+'" alt="'+esc(p.name)+'" width="160" height="160" loading="lazy">' : '')+'</div>' +
         '<div class="prod-body">' +
           '<div><div class="prod-nm">'+esc(p.name)+'</div><div class="prod-sz">'+sizeLabel(p.size_ml)+' bottle</div></div>' +
           '<div class="prod-foot">' +

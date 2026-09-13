@@ -254,6 +254,21 @@ function migrate(db) {
   const pcols = db.prepare(`PRAGMA table_info(products)`).all().map(c => c.name);
   if (!pcols.includes('image_url')) db.exec('ALTER TABLE products ADD COLUMN image_url TEXT');
 
+  // data repair: order_items.qty is INTEGER, and a stray huge value (e.g. a
+  // mis-typed quantity submitted before the server-side clamp existed) blows
+  // past Number.MAX_SAFE_INTEGER — node:sqlite throws RangeError trying to
+  // read it back, crashing every order list for that customer. Reading it
+  // back as a string sidesteps the throw so we can clamp it. Idempotent —
+  // does nothing once every row is back in range.
+  try {
+    const bad = db.prepare(`SELECT id, CAST(qty AS TEXT) AS qty FROM order_items WHERE qty > 999 OR qty < 0`).all();
+    if (bad.length) {
+      const fix = db.prepare('UPDATE order_items SET qty=999 WHERE id=?');
+      for (const row of bad) fix.run(row.id);
+      console.warn(`repaired ${bad.length} order_items row(s) with an out-of-range qty`);
+    }
+  } catch (e) { console.error('order_items qty repair skipped:', e && e.message); }
+
   const ucols = db.prepare(`PRAGMA table_info(users)`).all().map(c => c.name);
   if (!ucols.includes('salary')) db.exec('ALTER TABLE users ADD COLUMN salary REAL');
   if (!ucols.includes('status')) db.exec(`ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled'))`);

@@ -76,6 +76,7 @@
       </label>
       <div id="loginErr" class="form-err"></div>
       <button class="btn primary block" type="submit">Sign in</button>
+      <button id="openForgot" type="button" class="forgot-link">Forgot password?</button>
     </form>
     <button id="openSignup" class="signup-link">New here? Create an account</button>
     <a id="loginApkLink" class="app-dl-link hidden" href="/api/public/app/android">
@@ -96,6 +97,27 @@
     <p>Hi <b id="pendingName"></b> — your <b id="pendingRole"></b> account has been created.
        A manager will activate it shortly. You'll be able to sign in normally once it's approved.</p>
     <button id="pendingSignout" class="btn ghost block">Sign out</button>
+  </div>
+</div>
+
+<!-- set a new password (reached via the emailed reset link, #/reset-password/<token>) -->
+<div id="resetPassword" class="login hidden">
+  <div class="login-card">
+    <img class="login-logo" src="img/pure-pak-logo.jpeg" alt="PurePak">
+    <h1 class="login-title">Set a new password</h1>
+    <p class="login-sub">Choose a new password for your account.</p>
+    <form id="resetPasswordForm" autocomplete="off">
+      <label class="field">
+        <span>New password</span>
+        <input id="resetPass1" type="password" placeholder="••••••••" required autocomplete="new-password" minlength="6">
+      </label>
+      <label class="field">
+        <span>Confirm new password</span>
+        <input id="resetPass2" type="password" placeholder="••••••••" required autocomplete="new-password" minlength="6">
+      </label>
+      <div id="resetPasswordErr" class="form-err"></div>
+      <button class="btn primary block" type="submit">Set new password</button>
+    </form>
   </div>
 </div>
 

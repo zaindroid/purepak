@@ -114,16 +114,27 @@ const App = {
       if (pop && !pop.contains(e.target) && !e.target.closest('#topBell')) pop.remove();
     });
 
-    const restored = API.restore();
-    if (restored.token && restored.user) {
-      if (restored.user.status === 'pending') this.showPending(restored.user);
-      else this.enter(restored.user);
+    // an emailed reset link always wins, regardless of any existing session —
+    // someone locked out on a shared/old device shouldn't land back in it
+    if (!this.checkResetPasswordRoute()) {
+      const restored = API.restore();
+      if (restored.token && restored.user) {
+        if (restored.user.status === 'pending') this.showPending(restored.user);
+        else this.enter(restored.user);
+      }
+      else this.showLogin();
     }
-    else this.showLogin();
 
     // signup
     const signupBtn = document.getElementById('openSignup');
     if (signupBtn) signupBtn.addEventListener('click', () => this.openSignup());
+
+    // forgot password
+    const forgotBtn = document.getElementById('openForgot');
+    if (forgotBtn) forgotBtn.addEventListener('click', () => modalForgotPassword());
+
+    const resetForm = document.getElementById('resetPasswordForm');
+    if (resetForm) resetForm.addEventListener('submit', (e) => this.doResetPassword(e));
 
     const apkUploadBtn = document.getElementById('sideApkUpload');
     if (apkUploadBtn) apkUploadBtn.addEventListener('click', async () => {
@@ -157,6 +168,45 @@ const App = {
     this.hideSplash();
     document.getElementById('login').classList.remove('hidden');
     document.getElementById('app').classList.add('hidden');
+    document.getElementById('resetPassword').classList.add('hidden');
+  },
+
+  // handles #/reset-password/<token> whether it's the URL the page first
+  // loaded with, or one the user navigates/pastes to on an already-open tab
+  // (a plain hashchange never re-runs init(), so render() needs this too)
+  checkResetPasswordRoute() {
+    const m = /^#\/reset-password\/(.+)$/.exec(location.hash);
+    if (m) this.showResetPassword(m[1]);
+    return !!m;
+  },
+
+  showResetPassword(token) {
+    this.hideSplash();
+    this._resetToken = token;
+    document.getElementById('login').classList.add('hidden');
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('resetPassword').classList.remove('hidden');
+  },
+
+  async doResetPassword(e) {
+    e.preventDefault();
+    const p1 = document.getElementById('resetPass1').value;
+    const p2 = document.getElementById('resetPass2').value;
+    const errEl = document.getElementById('resetPasswordErr');
+    errEl.textContent = '';
+    if (p1.length < 6) { errEl.textContent = 'Password must be at least 6 characters'; return; }
+    if (p1 !== p2) { errEl.textContent = "Passwords don't match"; return; }
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Setting password…';
+    try {
+      await API.resetPassword(this._resetToken, p1);
+      location.hash = '';
+      this.showLogin();
+      this.toast('Password updated — sign in with your new password', 'ok');
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Set new password';
+      errEl.textContent = err.message || 'That reset link is invalid or has expired';
+    }
   },
 
   async doLogin(e) {
@@ -418,6 +468,7 @@ const App = {
   },
 
   async render() {
+    if (this.checkResetPasswordRoute()) return;
     const u = API.user;
     if (!u) return this.showLogin();
     const parts = this.hashRoute().split('/');

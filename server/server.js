@@ -164,6 +164,26 @@ async function sendPush(userIds, title, body, data = {}) {
   }
 }
 
+// ---------- transactional email (Resend) ----------
+// Not configured until RESEND_API_KEY is set — until then this just logs
+// and returns false, so forgot-password still "succeeds" from the caller's
+// point of view (never reveals whether an email is registered) but no mail
+// actually goes out; useful for local dev without needing a real key.
+async function sendEmail(to, subject, html) {
+  const key = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM || 'PurePak <onboarding@resend.dev>';
+  if (!key) { console.warn(`[email not configured] would send "${subject}" to ${to}`); return false; }
+  try {
+    const resp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+      body: JSON.stringify({ from, to, subject, html }),
+    });
+    if (!resp.ok) { console.error('Resend send failed:', resp.status, await resp.text().catch(() => '')); return false; }
+    return true;
+  } catch (e) { console.error('Resend send error:', e.message); return false; }
+}
+
 // ---------- notifications (in-app feed) ----------
 function notify(userIds, kind, title, body, ref) {
   const ids = [...new Set(userIds.filter(Boolean))];
@@ -745,6 +765,46 @@ async function handleApi(req, res, url) {
     db.prepare(`UPDATE users SET last_login_at=? WHERE id=?`).run(new Date().toISOString().slice(0, 19).replace('T', ' '), u.id);
     const token = newSession(u);
     return json(res, 200, { token, user: userView(u), pending: false });
+  }
+  // ---- self-service "forgot password" (separate from a manager resetting
+  // someone else's password in-app, further down at /users/:id/reset-password) ----
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'forgot-password') {
+    const b = await readBody(req);
+    const email = String(b.email || '').trim().toLowerCase();
+    // identical response either way — never reveal whether an email is registered
+    const GENERIC = { ok: true, message: 'If that email is registered, a reset link has been sent.' };
+    if (!email) return json(res, 200, GENERIC);
+    if (rateLimited('forgot:' + email, 5, 60 * 60 * 1000)) return json(res, 200, GENERIC);
+    if (rateLimited('forgot-ip:' + clientIp(req), 20, 60 * 60 * 1000)) return json(res, 200, GENERIC);
+    const u = db.prepare('SELECT * FROM users WHERE email=? AND active=1').get(email);
+    if (u) {
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+      db.prepare('INSERT INTO password_resets(token,user_id,expires_at) VALUES (?,?,?)').run(token, u.id, expiresAt);
+      const origin = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;
+      const link = `${origin}/#/reset-password/${token}`;
+      const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      sendEmail(u.email, 'Reset your PurePak password',
+        `<p>Hi ${esc(u.name)},</p><p>Click below to set a new password. This link works once and expires in an hour.</p>
+         <p><a href="${link}">${esc(link)}</a></p><p>Didn't request this? You can safely ignore this email.</p>`
+      ).catch(() => {});
+    }
+    return json(res, 200, GENERIC);
+  }
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'reset-password') {
+    const b = await readBody(req);
+    const token = String(b.token || '').trim();
+    const password = String(b.password || '');
+    if (!token) return err(res, 400, 'Missing reset token');
+    if (password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
+    const row = db.prepare('SELECT * FROM password_resets WHERE token=?').get(token);
+    if (!row || row.used || new Date(row.expires_at + 'Z').getTime() < Date.now())
+      return err(res, 400, 'This reset link is invalid or has expired — request a new one');
+    db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(password), row.user_id);
+    db.prepare('UPDATE password_resets SET used=1 WHERE token=?').run(token);
+    // force re-login everywhere — a leaked/old session shouldn't survive a reset
+    for (const [tok, sess] of SESSIONS) { if (sess.user && sess.user.id === row.user_id) SESSIONS.delete(tok); }
+    return json(res, 200, { ok: true });
   }
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'signup') {
     const b = await readBody(req);

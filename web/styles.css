@@ -211,6 +211,8 @@ table.mini-items tr.tot td{border-bottom:none;border-top:1.5px solid var(--ink);
 .su-note b{color:var(--ink)}
 .signup-link{margin-top:14px;background:none;border:none;color:var(--teal);font:600 13px inherit;cursor:pointer;letter-spacing:.01em}
 .signup-link:hover{text-decoration:underline}
+.forgot-link{display:block;width:100%;margin-top:10px;background:none;border:none;color:var(--ink-3);font:600 12.5px inherit;cursor:pointer;text-align:center}
+.forgot-link:hover{color:var(--teal);text-decoration:underline}
 .su-types{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:14px 18px 4px}
 .su-type{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border:1.5px solid var(--line);border-radius:12px;background:#fff;cursor:pointer;text-align:left}
 .su-type b{font-size:13px}

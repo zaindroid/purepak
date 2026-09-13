@@ -234,6 +234,17 @@ function migrate(db) {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- self-service "forgot password" — a short-lived, single-use token mailed
+  -- to the account's email; the admin-driven reset-password endpoint (a
+  -- manager resetting someone else's password in-app) is unrelated and unchanged
+  CREATE TABLE IF NOT EXISTS password_resets (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

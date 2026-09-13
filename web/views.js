@@ -170,6 +170,37 @@ function showTempPassword(pw, title = 'Temporary password') {
   });
 }
 
+// self-service password reset — from the login screen's "Forgot password?"
+function modalForgotPassword() {
+  openModal('Reset your password', `
+    <div class="modal-bd">
+      <p class="muted" style="margin:0 0 12px;font-size:13px;line-height:1.5">Enter the email on your account and we'll send a link to set a new password.</p>
+      <label class="muted">Email</label>
+      <input id="fpEmail" class="input" style="width:100%" type="email" placeholder="you@purepak.pk" autocomplete="username">
+      <div id="fpErr" class="form-err"></div>
+    </div>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button>
+     <button class="btn primary" id="fpSubmit">Send reset link</button>`);
+  const submit = async () => {
+    const email = document.getElementById('fpEmail').value.trim();
+    const errEl = document.getElementById('fpErr');
+    errEl.textContent = '';
+    if (!email) { errEl.textContent = 'Enter your email address'; return; }
+    const btn = document.getElementById('fpSubmit');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      await API.forgotPassword(email);
+      closeModal();
+      toast("If that email is registered, we've sent a reset link", 'ok');
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Send reset link';
+      errEl.textContent = e.message || 'Something went wrong — try again';
+    }
+  };
+  document.getElementById('fpSubmit').addEventListener('click', submit);
+  document.getElementById('fpEmail').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+}
+
 async function loadOrderForm(prefill = {}) {
   const products = await API.products();
   const items = prefill.items || [{ product_id: products[0].id, qty: 1 }];

@@ -2270,6 +2270,51 @@ function wirePhotoPicker(prefix, state) {
   });
 }
 
+// reads any file straight to base64 — no image downscaling (used for the
+// .apk upload, where re-encoding would corrupt the binary)
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function modalUploadApk(currentVersion) {
+  openModal('Upload Android app', `
+    <div class="modal-bd">
+      <label class="muted">Version</label>
+      <input id="apkVersion" class="input" style="width:100%;margin-bottom:10px" placeholder="1.7" value="">
+      <label class="muted">APK file</label>
+      <input type="file" id="apkFile" class="input" style="width:100%" accept=".apk">
+      <p class="muted" style="font-size:12px;margin-top:10px">
+        ${currentVersion ? `Currently live: v${API.esc(currentVersion)}. ` : ''}
+        Replaces the app everyone downloads from the login screen and sidebar — make sure it's the signed release build.
+      </p>
+    </div>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button>
+     <button class="btn primary" id="apkSubmit">Upload</button>`);
+  document.getElementById('apkSubmit').addEventListener('click', async () => {
+    const version = document.getElementById('apkVersion').value.trim();
+    const file = document.getElementById('apkFile').files[0];
+    if (!version) return toast('Enter the version number', 'warn');
+    if (!file) return toast('Choose the .apk file', 'warn');
+    const btn = document.getElementById('apkSubmit');
+    btn.disabled = true; btn.textContent = 'Uploading…';
+    try {
+      const apk = await fileToBase64(file);
+      await API.uploadAndroidApk({ apk, version });
+      closeModal();
+      toast('App v' + version + ' is live', 'ok');
+      if (window.App) window.App.initAppDownloadLinks();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Upload';
+      toast(e.message, 'err');
+    }
+  });
+}
+
 function modalAddProduct() {
   const state = {};
   openModal('Add product', `

@@ -78,6 +78,7 @@ const API = (() => {
     offers: () => g('/offers'),
     activeOffers: () => g('/offers/active'),
     androidAppInfo: () => g('/public/app/android-info'),
+    uploadAndroidApk: (b) => post('/admin/app/android', b),
     createOffer: (b) => post('/offers', b),
     updateOffer: (id, b) => patch('/offers/' + id, b),
     deleteOffer: (id) => del('/offers/' + id),

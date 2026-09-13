@@ -103,6 +103,12 @@ const App = {
     const signupBtn = document.getElementById('openSignup');
     if (signupBtn) signupBtn.addEventListener('click', () => this.openSignup());
 
+    const apkUploadBtn = document.getElementById('sideApkUpload');
+    if (apkUploadBtn) apkUploadBtn.addEventListener('click', async () => {
+      const info = await API.androidAppInfo().catch(() => null);
+      modalUploadApk(info && info.available ? info.version : null);
+    });
+
     window.addEventListener('hashchange', () => this.render());
 
     this.initAppDownloadLinks();
@@ -231,6 +237,10 @@ const App = {
     if (!location.hash || location.hash === '#/') location.hash = '#/' + def;
     this.render();
     this.bellStart();
+
+    // only admin/manager get the "upload a new build" control
+    const uploadBtn = document.getElementById('sideApkUpload');
+    if (uploadBtn) uploadBtn.classList.toggle('hidden', !['admin', 'manager'].includes(user.role));
   },
 
   logout() {

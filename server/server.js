@@ -1188,7 +1188,7 @@ async function handleApi(req, res, url) {
     const prepared = items.map(it => {
       const p = db.prepare('SELECT * FROM products WHERE id=?').get(it.product_id);
       if (!p) throw httpError(400, 'Unknown product ' + it.product_id);
-      const qty = Math.max(1, Math.round(Number(it.qty) || 1));
+      const qty = Math.max(1, Math.min(999, Math.round(Number(it.qty) || 1)));
       // price per the customer's type (matrix override), else base price
       const price = priceForCustomer(p.id, cust.type);
       total += qty * price;

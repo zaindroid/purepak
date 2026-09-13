@@ -178,7 +178,7 @@ async function loadOrderForm(prefill = {}) {
     const unit = (typeof p.effective_price === 'number') ? p.effective_price : p.price;
     const img = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) : null);
     return `<div class="field"><span class="item-line-lbl">${img ? `<img class="item-thumb" src="${img}" alt="" loading="lazy">` : ''}${API.esc(p.name)}</span>
-      <div class="row2"><input type="number" min="0" step="1" data-itemqty="${p.id}" value="${it.qty || 0}">
+      <div class="row2"><input type="number" min="0" max="999" step="1" inputmode="numeric" data-itemqty="${p.id}" value="${it.qty || 0}">
       <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / each</div></div></div>
     </div>`;
   }).join('');
@@ -244,7 +244,12 @@ async function modalCreateOrder(opts = {}) {
     totalEl.textContent = API.fmtMoney(t);
   }
   document.querySelectorAll('[data-itemqty]').forEach(i => i.addEventListener('input', () => {
-    if (parseInt(i.value) < 0) i.value = 0; // typing a "-" isn't blocked by min="0" alone
+    // whole bottles only, 0-999 — a stray "-", a decimal, or a huge pasted/typed
+    // number would otherwise skew the total or send an unusable qty to the server
+    let v = parseInt(i.value, 10);
+    if (!Number.isFinite(v) || v < 0) v = 0;
+    if (v > 999) v = 999;
+    if (String(v) !== i.value) i.value = v;
     recalc(); payHint();
   }));
   recalc();

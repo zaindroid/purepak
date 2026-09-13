@@ -77,6 +77,7 @@ const API = (() => {
     savePaymentAccounts: (accounts) => post('/payment-methods', { accounts }),
     offers: () => g('/offers'),
     activeOffers: () => g('/offers/active'),
+    androidAppInfo: () => g('/public/app/android-info'),
     createOffer: (b) => post('/offers', b),
     updateOffer: (id, b) => patch('/offers/' + id, b),
     deleteOffer: (id) => del('/offers/' + id),

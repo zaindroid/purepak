@@ -15,6 +15,9 @@ const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
 // admin-uploaded product photos — same persistent-volume reasoning as receipts;
 // the stock bottle shots that ship in web/img/ are separate and never touch this dir
 const PRODUCT_IMG_DIR = path.join(DATA_DIR, 'product-images');
+// the Android release APK, uploaded once by an admin so the portal can offer
+// a direct "download the app" link — also on the persistent volume
+const APK_DIR = path.join(DATA_DIR, 'app-releases');
 const SESSIONS = new Map(); // token -> {user, createdAt}
 // Public guest-order rate limiting (the QR landing page has no auth at all) —
 // a coarse per-IP + per-phone throttle, not a CAPTCHA; enough to blunt casual
@@ -726,6 +729,41 @@ async function handleApi(req, res, url) {
     const ct = f.endsWith('.png') ? 'image/png' : f.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
     res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'public, max-age=31536000, immutable' });
     return res.end(buf);
+  }
+  // ---- Android app distribution: admin uploads the signed release APK once,
+  // the portal offers a direct "download the app" link everywhere it fits ----
+  if (method === 'GET' && parts[1] === 'public' && parts[2] === 'app' && parts[3] === 'android-info') {
+    const version = setting('android_apk_version');
+    const size = setting('android_apk_size');
+    return json(res, 200, version ? { available: true, version, size: size ? Number(size) : null } : { available: false });
+  }
+  if (method === 'GET' && parts[1] === 'public' && parts[2] === 'app' && parts[3] === 'android') {
+    const f = path.join(APK_DIR, 'purepak.apk');
+    if (!fs.existsSync(f)) return err(res, 404, 'App not available yet');
+    const version = setting('android_apk_version') || 'latest';
+    res.writeHead(200, {
+      'Content-Type': 'application/vnd.android.package-archive',
+      'Content-Disposition': `attachment; filename="PurePak-v${version}.apk"`,
+      'Cache-Control': 'no-cache',
+    });
+    return fs.createReadStream(f).pipe(res);
+  }
+  if (method === 'POST' && parts[1] === 'admin' && parts[2] === 'app' && parts[3] === 'android') {
+    requireRole(user, ['admin', 'manager']);
+    const b = await readBody(req);
+    const apkB64 = String(b.apk || '');
+    const version = String(b.version || '').trim().slice(0, 20);
+    if (!apkB64 || apkB64.length < 1000) return err(res, 400, 'apk data required');
+    if (!version) return err(res, 400, 'version required');
+    if (!fs.existsSync(APK_DIR)) fs.mkdirSync(APK_DIR, { recursive: true });
+    const buf = decodeB64(apkB64);
+    fs.writeFileSync(path.join(APK_DIR, 'purepak.apk'), buf);
+    db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES ('android_apk_version',?,datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`).run(version);
+    db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES ('android_apk_size',?,datetime('now'))
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`).run(String(buf.length));
+    audit(user, 'app.android.upload', 'settings', null, `Uploaded Android app v${version}`, null, { version, size: buf.length });
+    return json(res, 201, { version, size: buf.length });
   }
   if (method === 'POST' && parts[1] === 'public' && parts[2] === 'order') {
     const ip = clientIp(req);

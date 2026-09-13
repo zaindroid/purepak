@@ -104,6 +104,19 @@ const App = {
     if (signupBtn) signupBtn.addEventListener('click', () => this.openSignup());
 
     window.addEventListener('hashchange', () => this.render());
+
+    this.initAppDownloadLinks();
+  },
+
+  // shows the "Get the Android app" link (login screen + sidebar) once a
+  // build has actually been uploaded — stays hidden otherwise so nobody
+  // gets a dead link
+  async initAppDownloadLinks() {
+    let info;
+    try { info = await API.androidAppInfo(); } catch { return; }
+    if (!info || !info.available) return;
+    document.querySelectorAll('#loginApkVer, #sideApkVer').forEach(el => { el.textContent = 'v' + info.version; });
+    document.querySelectorAll('#loginApkLink, #sideApkLink').forEach(el => el.classList.remove('hidden'));
   },
 
   hideSplash() {

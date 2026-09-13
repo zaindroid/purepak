@@ -406,7 +406,7 @@ public class MainActivity extends AppCompatActivity {
 
         @android.webkit.JavascriptInterface
         public String version() {
-            return "1.6";
+            return "1.8";
         }
     }
 }

@@ -11,6 +11,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.ContextCompat;
 
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
@@ -56,13 +57,19 @@ public class PurePakFirebaseMessagingService extends FirebaseMessagingService {
         PendingIntent pi = PendingIntent.getActivity(this, new Random().nextInt(), tap, flags);
 
         NotificationCompat.Builder n = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setColor(ContextCompat.getColor(this, R.color.pp_blue))
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
                 .setContentIntent(pi)
-                .setPriority(NotificationCompat.PRIORITY_HIGH);
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                // no explicit sound/vibration pattern here — the channel below
+                // controls both, so the phone's own ringer/silent/DND mode and
+                // the user's per-app notification settings decide, same as any
+                // other app; we don't override what they've chosen
+                .setDefaults(NotificationCompat.DEFAULT_ALL);
 
         try {
             NotificationManagerCompat.from(this).notify((int) System.currentTimeMillis(), n.build());
@@ -78,6 +85,12 @@ public class PurePakFirebaseMessagingService extends FirebaseMessagingService {
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return;
         NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "PurePak updates", NotificationManager.IMPORTANCE_HIGH);
         ch.setDescription("Orders, deliveries and account updates");
+        // IMPORTANCE_HIGH already gets the phone's default notification sound;
+        // vibration needs enabling explicitly. Either way this just turns the
+        // channel ON — whether it actually sounds/buzzes still follows the
+        // phone's own ringer mode (silent/vibrate/normal) and Do Not Disturb,
+        // exactly like every other app's notifications.
+        ch.enableVibration(true);
         nm.createNotificationChannel(ch);
     }
 }

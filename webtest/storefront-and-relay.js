@@ -142,7 +142,7 @@ async function openStream(token) {
   const view = document.getElementById('view');
   check('storefront hero renders (not a dashboard)', /shop-hero/.test(view.innerHTML) && !/grid kpis/.test(view.innerHTML));
   check('hero is trimmed — no plant address', !/Golra/i.test(view.querySelector('.shop-hero').innerHTML));
-  check('floating WhatsApp button deep-links to the app', /href="whatsapp:\/\/send/.test((view.querySelector('.wa-fab') || {}).outerHTML || ''));
+  check('floating WhatsApp button uses the universal wa.me link', /href="https:\/\/wa\.me\//.test((view.querySelector('.wa-fab') || {}).outerHTML || ''));
   const firstPid = view.querySelector('.prod').dataset.pid;
   const catalog = await (await fetch(BASE + '/api/products', { headers: { Authorization: 'Bearer ' + custTok } })).json();
   check('a product card per catalog item', view.querySelectorAll('.prod').length === catalog.length,
@@ -191,7 +191,7 @@ async function openStream(token) {
   view.querySelector('[data-shop="contact"]').click();
   await sleep(200);
   const cm = document.getElementById('modalRoot');
-  check('Contact us opens a details modal', /whatsapp:\/\/send/.test(cm.innerHTML) && /purepak\.com\.pk/.test(cm.innerHTML) && /6666 796/.test(cm.innerHTML));
+  check('Contact us opens a details modal', /https:\/\/wa\.me\//.test(cm.innerHTML) && /purepak\.com\.pk/.test(cm.innerHTML) && /6666 796/.test(cm.innerHTML));
 
   console.log('----');
   console.log(fails === 0 ? 'STOREFRONT + RELAY: ALL PASS' : fails + ' FAILURES');

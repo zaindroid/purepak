@@ -627,7 +627,7 @@ body.has-cartbar .shop{padding-bottom:150px}
   overflow:hidden;
 }
 .prod-ic svg{width:26px;height:26px}
-.prod-ic img{width:auto;height:100%;max-width:100%;object-fit:contain;display:block}
+.prod-ic img{width:auto;height:auto;max-width:85%;max-height:72px;object-fit:contain;display:block}
 .prod-main{display:flex;flex-direction:column;flex:1 1 auto} /* grows so CTA sits flush at the bottom */
 .prod-nm{font-weight:700;font-size:13px;line-height:1.3;letter-spacing:-.01em}
 .prod-sz{font-size:11px;color:var(--ink-3);margin-top:1px}

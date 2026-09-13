@@ -231,6 +231,7 @@ const App = {
     }).join('');
     document.querySelectorAll('#nav a').forEach(a => a.addEventListener('click', () => {
       document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('scrim').classList.add('hidden');
     }));
     const def = nav[0].to;
     this.route = def;

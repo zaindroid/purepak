@@ -243,7 +243,10 @@ async function modalCreateOrder(opts = {}) {
     });
     totalEl.textContent = API.fmtMoney(t);
   }
-  document.querySelectorAll('[data-itemqty]').forEach(i => i.addEventListener('input', () => { recalc(); payHint(); }));
+  document.querySelectorAll('[data-itemqty]').forEach(i => i.addEventListener('input', () => {
+    if (parseInt(i.value) < 0) i.value = 0; // typing a "-" isn't blocked by min="0" alone
+    recalc(); payHint();
+  }));
   recalc();
   payHint();
   document.getElementById('ocSubmit').addEventListener('click', async () => {
@@ -1163,9 +1166,11 @@ function modalCorrectLedger(id) {
 
 // ================= CUSTOMER (storefront) =================
 const WA_NUMBER = '923156666796';
-// whatsapp:// opens the installed phone app directly (wa.me / https falls
-// through to WhatsApp Web on desktop and inside some Android WebViews).
-const WA_LINK = `whatsapp://send?phone=${WA_NUMBER}&text=${encodeURIComponent('Hi PurePak, I need help with my water order.')}`;
+// https://wa.me/... is the universal WhatsApp link — deep-links into the
+// installed app on phones, falls through to WhatsApp Web on desktop, and
+// (unlike the whatsapp:// custom scheme) always resolves to something,
+// including inside our own Android WebView.
+const WA_LINK = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent('Hi PurePak, I need help with my water order.')}`;
 const WA_ICON = '<svg viewBox="0 0 32 32" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M16 3C9.373 3 4 8.373 4 15c0 2.65.86 5.1 2.316 7.09L4.6 28l6.13-1.607A11.94 11.94 0 0 0 16 27c6.627 0 12-5.373 12-12S22.627 3 16 3zm0 21.82a9.78 9.78 0 0 1-5.04-1.49l-.36-.23-3.64.955.97-3.55-.24-.37A9.78 9.78 0 0 1 6.18 15c0-5.42 4.41-9.83 9.82-9.83 2.62 0 5.09 1.02 6.94 2.88a9.75 9.75 0 0 1 2.88 6.95c0 5.42-4.41 9.82-9.82 9.82zm5.39-7.36c-.3-.15-1.75-.86-2.02-.96-.27-.1-.47-.15-.66.15-.2.3-.76.96-.93 1.15-.17.2-.34.22-.63.07-.3-.15-1.25-.46-2.38-1.47-.88-.79-1.47-1.76-1.65-2.06-.17-.3-.02-.46.13-.6.13-.13.3-.34.44-.5.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.66-1.6-.9-2.19-.24-.57-.48-.5-.66-.5l-.57-.01c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.48 0 1.47 1.07 2.88 1.22 3.08.15.2 2.1 3.2 5.08 4.49.71.3 1.26.49 1.7.63.71.23 1.36.2 1.87.12.57-.08 1.75-.72 2-1.4.25-.7.25-1.28.17-1.4-.07-.13-.27-.2-.57-.35z"/></svg>';
 
 const sizeLabel = (ml) => ml >= 1000

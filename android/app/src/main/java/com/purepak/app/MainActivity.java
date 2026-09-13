@@ -192,6 +192,12 @@ public class MainActivity extends AppCompatActivity {
                     }
                     return true;
                 }
+                // any other custom scheme (whatsapp://, intent://, etc.) — hand it
+                // to the OS instead of silently swallowing the tap
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, u));
+                } catch (ActivityNotFoundException ignored) {
+                }
                 return true;
             }
 

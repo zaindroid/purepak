@@ -10,6 +10,28 @@ window.onViewRender = function (route, view) {
 // toast alias used by views
 window.ppToast = function (msg, cls) { if (window.App) App.toast(msg, cls); };
 
+// ---- push notification token bridge (called from the native Android/iOS
+// shell — see MainActivity's evaluateJavascript calls). If the page hasn't
+// logged in yet when the native side hands us a token, stash it and send it
+// once App.enter() runs; a plain browser tab never calls this at all.
+let pendingPushToken = null, registeredPushToken = null;
+window.onPushToken = function (token) {
+  if (!token) return;
+  if (API.token) {
+    API.registerDeviceToken(token, 'android').then(() => { registeredPushToken = token; }).catch(() => {});
+  } else {
+    pendingPushToken = token;
+  }
+};
+// a tapped push notification carries the same "ref" format as the in-app
+// bell (e.g. "order#123") — App.routeByRef navigates either way
+let pendingPushRef = null;
+window.onPushOpen = function (ref) {
+  if (!ref) return;
+  if (API.user && window.App) window.App.routeByRef(ref);
+  else pendingPushRef = ref;
+};
+
 // Count-up on KPI values after a view renders (skips on reduced-motion)
 function animateKPIs(root) {
   if (typeof requestAnimationFrame === 'undefined') return; // no rAF (e.g. jsdom)
@@ -242,9 +264,15 @@ const App = {
     // only admin/manager get the "upload a new build" control
     const uploadBtn = document.getElementById('sideApkUpload');
     if (uploadBtn) uploadBtn.classList.toggle('hidden', !['admin', 'manager'].includes(user.role));
+
+    // the native shell may have handed us a push token/open-ref before login finished
+    if (pendingPushToken) { window.onPushToken(pendingPushToken); pendingPushToken = null; }
+    if (pendingPushRef) { const r = pendingPushRef; pendingPushRef = null; setTimeout(() => this.routeByRef(r), 300); }
   },
 
   logout() {
+    if (registeredPushToken) API.unregisterDeviceToken(registeredPushToken).catch(() => {});
+    registeredPushToken = null;
     API.logout();
     location.hash = '';
     this.showLogin();
@@ -348,11 +376,9 @@ const App = {
       try { await API.markNotificationsRead(); this.bellUpdate(true); } catch {}
     });
   },
-  async bellOpen(id) {
-    try { await API.markNotificationsRead(id); } catch {}
-    const it = (this._bellItems || []).find(x => x.id === id);
-    document.getElementById('bellPop')?.remove();
-    const ref = (it && it.ref) || '';
+  // shared by the in-app bell (bellOpen) and a tapped push notification
+  // (onPushOpen, below) — same "ref" format either way (e.g. "order#123")
+  routeByRef(ref) {
     const valid = navFor(API.user.role).map(n => n.to);
     const goto = (...prefs) => { location.hash = '#/' + (prefs.find(p => valid.includes(p)) || valid[0] || 'dashboard'); };
     let m;
@@ -377,6 +403,13 @@ const App = {
     } else if (/^offer#/.test(ref)) {
       goto('home', 'dashboard'); // the offer banner lives on the customer's Shop page
     }
+  },
+
+  async bellOpen(id) {
+    try { await API.markNotificationsRead(id); } catch {}
+    const it = (this._bellItems || []).find(x => x.id === id);
+    document.getElementById('bellPop')?.remove();
+    this.routeByRef((it && it.ref) || '');
     this.bellUpdate(true).catch(() => {});
   },
 

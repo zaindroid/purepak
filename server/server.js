@@ -91,6 +91,79 @@ function setting(key) {
   try { return db.prepare('SELECT value FROM settings WHERE key=?').get(key)?.value ?? null; } catch { return null; }
 }
 function maskKey(k) { return k ? String(k).slice(0, 6) + '…' + String(k).slice(-4) : null; }
+// ---------- push notifications (Firebase Cloud Messaging) ----------
+// Reaches a phone even when the app is backgrounded or fully closed, unlike
+// the SSE-based in-app bell above, which only works while the page is open.
+// Not configured until FCM_SERVICE_ACCOUNT_JSON is set — until then every
+// call below is a silent no-op, so the rest of the app behaves exactly as
+// it did before this existed.
+function fcmServiceAccount() {
+  const raw = process.env.FCM_SERVICE_ACCOUNT_JSON;
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { console.error('FCM_SERVICE_ACCOUNT_JSON is not valid JSON:', e.message); return null; }
+}
+let fcmAccessToken = null, fcmAccessTokenExpiry = 0;
+async function getFcmAccessToken() {
+  const sa = fcmServiceAccount();
+  if (!sa) return null;
+  if (fcmAccessToken && Date.now() < fcmAccessTokenExpiry - 60000) return fcmAccessToken;
+  const now = Math.floor(Date.now() / 1000);
+  const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const unsigned = b64url({ alg: 'RS256', typ: 'JWT' }) + '.' + b64url({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now, exp: now + 3600,
+  });
+  const signature = crypto.createSign('RSA-SHA256').update(unsigned).sign(sa.private_key).toString('base64url');
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + unsigned + '.' + signature,
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!data.access_token) throw new Error('FCM token exchange failed: ' + JSON.stringify(data));
+  fcmAccessToken = data.access_token;
+  fcmAccessTokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
+  return fcmAccessToken;
+}
+// fire-and-forget — never throws into the caller, and notify() below never
+// awaits this, so a slow or failing push never delays the in-app path
+async function sendPush(userIds, title, body, data = {}) {
+  const sa = fcmServiceAccount();
+  if (!sa) return;
+  const ids = [...new Set((userIds || []).filter(Boolean))];
+  if (!ids.length) return;
+  const rows = db.prepare(`SELECT token FROM device_tokens WHERE user_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+  if (!rows.length) return;
+  let accessToken;
+  try { accessToken = await getFcmAccessToken(); } catch (e) { console.error('FCM auth failed:', e.message); return; }
+  if (!accessToken) return;
+  // data-only (no top-level "notification" block): FCM/Android would otherwise
+  // auto-display the notification while the app is backgrounded and skip our
+  // code entirely, so a tap couldn't carry the "ref" needed to deep-link into
+  // the right screen. Sending everything as data means our own Android
+  // service always builds the notification and always gets to attach that.
+  const strData = Object.fromEntries(Object.entries({ ...data, title, body }).map(([k, v]) => [k, String(v)]));
+  for (const { token } of rows) {
+    try {
+      const resp = await fetch(`https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + accessToken },
+        body: JSON.stringify({ message: { token, data: strData } }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        const status = err.error && err.error.status;
+        // the app was uninstalled or the token otherwise expired — stop trying it
+        if (resp.status === 404 || status === 'NOT_FOUND' || status === 'UNREGISTERED')
+          db.prepare('DELETE FROM device_tokens WHERE token=?').run(token);
+        else console.error('FCM send failed:', resp.status, JSON.stringify(err));
+      }
+    } catch (e) { console.error('FCM send error:', e.message); }
+  }
+}
+
 // ---------- notifications (in-app feed) ----------
 function notify(userIds, kind, title, body, ref) {
   const ids = [...new Set(userIds.filter(Boolean))];
@@ -99,6 +172,7 @@ function notify(userIds, kind, title, body, ref) {
       .run(uid, kind, title, body || null, ref || null);
     sseSend(uid, kind); // push to any live SSE stream for that user, instantly
   }
+  sendPush(ids, title, body, { kind, ref: ref || '' }).catch(() => {}); // best-effort, never blocks the caller
   return ids.length;
 }
 function staffUserIds() {
@@ -1757,6 +1831,27 @@ async function handleApi(req, res, url) {
     const b = await readBody(req);
     if (b.id) db.prepare(`UPDATE notifications SET read=1 WHERE id=? AND user_id=?`).run(+b.id, user.id);
     else db.prepare(`UPDATE notifications SET read=1 WHERE user_id=?`).run(user.id);
+    return json(res, 200, { ok: true });
+  }
+  // ---- push notification device tokens (the Android/iOS app registers its
+  // FCM token here once logged in; keyed by token so a shared/reused device
+  // always follows whoever is currently signed in) ----
+  if (method === 'POST' && parts[1] === 'device-token' && parts.length === 2) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    const b = await readBody(req);
+    const token = String(b.token || '').trim();
+    if (!token) return err(res, 400, 'token required');
+    const platform = ['android', 'ios'].includes(b.platform) ? b.platform : 'android';
+    db.prepare(`INSERT INTO device_tokens(token,user_id,platform,updated_at) VALUES (?,?,?,datetime('now'))
+                ON CONFLICT(token) DO UPDATE SET user_id=excluded.user_id, platform=excluded.platform, updated_at=excluded.updated_at`)
+      .run(token, user.id, platform);
+    return json(res, 200, { ok: true });
+  }
+  if (method === 'DELETE' && parts[1] === 'device-token' && parts.length === 2) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    const b = await readBody(req);
+    const token = String(b.token || '').trim();
+    if (token) db.prepare('DELETE FROM device_tokens WHERE token=? AND user_id=?').run(token, user.id);
     return json(res, 200, { ok: true });
   }
   if (method === 'GET' && parts[1] === 'receipts' && parts.length === 2) {

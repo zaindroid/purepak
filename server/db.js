@@ -149,6 +149,16 @@ function migrate(db) {
     line_total REAL NOT NULL
   );
 
+  -- push-notification device tokens (FCM). Keyed by the token itself, not
+  -- user_id, so a shared/reused device correctly follows whoever is
+  -- currently logged in rather than notifying two accounts at once.
+  CREATE TABLE IF NOT EXISTS device_tokens (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL DEFAULT 'android',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS deliveries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,

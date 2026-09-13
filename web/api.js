@@ -78,6 +78,8 @@ const API = (() => {
     offers: () => g('/offers'),
     activeOffers: () => g('/offers/active'),
     androidAppInfo: () => g('/public/app/android-info'),
+    registerDeviceToken: (token, platform) => post('/device-token', { token, platform }),
+    unregisterDeviceToken: (token) => req('DELETE', '/device-token', { token }),
     uploadAndroidApk: (b) => post('/admin/app/android', b),
     createOffer: (b) => post('/offers', b),
     updateOffer: (id, b) => patch('/offers/' + id, b),

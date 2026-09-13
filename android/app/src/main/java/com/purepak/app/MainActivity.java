@@ -9,6 +9,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.provider.MediaStore;
@@ -33,6 +34,10 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
+import com.google.firebase.messaging.FirebaseMessaging;
+
+import org.json.JSONObject;
+
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -45,8 +50,14 @@ import java.util.Locale;
  * - JS bridge window.PurePak for app-side hooks (toast, settings)
  * - Native back button => in-page history, then exit
  * - Geolocation (rider GPS for smart route) + file/camera picker (receipt scanning)
+ * - Push notifications (FCM): hands the device token to the page
+ *   (window.onPushToken) and, if launched/resumed from a tapped
+ *   notification, its "ref" (window.onPushOpen) — see
+ *   PurePakFirebaseMessagingService and app.js's App.routeByRef.
  */
 public class MainActivity extends AppCompatActivity {
+    public static final String EXTRA_PUSH_REF = "push_ref";
+    private static final int REQ_NOTIFICATIONS = 43;
 
     private static final String TAG = "PurePak";
     private static final int REQ_LOCATION = 42;
@@ -57,6 +68,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean splashHidden = false;
     private String serverHost = "";
     private int serverPort = 80;
+    private String pendingPushRef = null; // consumed once the page has loaded
 
     // pending web-file input (receipt camera)
     private ValueCallback<Uri[]> fileCb;
@@ -84,6 +96,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        pendingPushRef = getIntent().getStringExtra(EXTRA_PUSH_REF);
 
         web = findViewById(R.id.web);
         pb = findViewById(R.id.pbLoad);
@@ -210,6 +223,8 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView v, String url) {
                 pb.setVisibility(View.GONE);
                 dismissSplash();
+                deliverPushToken();
+                if (pendingPushRef != null) { sendPushRefToPage(pendingPushRef); pendingPushRef = null; }
             }
         });
 
@@ -225,6 +240,12 @@ public class MainActivity extends AppCompatActivity {
 
         // location permission — needed before GPS works for the smart route
         ensureLocationPermission();
+        // notification permission — required at runtime on Android 13+ for
+        // any push to actually show; harmless no-op on older versions
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
+        }
 
         // Resolve which server to load. A manual override (set via the
         // Settings gear, e.g. for local dev on the same Wi-Fi) always wins;
@@ -252,6 +273,33 @@ public class MainActivity extends AppCompatActivity {
         serverHost = bu.getHost() == null ? "" : bu.getHost();
         serverPort = bu.getPort() != -1 ? bu.getPort() : ("https".equals(bu.getScheme()) ? 443 : 80);
         web.loadUrl(base);
+    }
+
+    // launchMode="singleTask" means a tapped notification while the app is
+    // already running arrives here instead of a fresh onCreate — the page is
+    // already loaded, so route immediately rather than waiting for onPageFinished
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String ref = intent.getStringExtra(EXTRA_PUSH_REF);
+        if (ref != null && web != null) sendPushRefToPage(ref);
+    }
+
+    private void sendPushRefToPage(String ref) {
+        web.evaluateJavascript("window.onPushOpen && window.onPushOpen(" + JSONObject.quote(ref) + ")", null);
+    }
+
+    // FirebaseMessaging.getToken() always returns the current token (fetching
+    // and caching one on first call), whether or not it has ever rotated —
+    // simpler and just as reliable as forwarding onNewToken() across components.
+    private void deliverPushToken() {
+        FirebaseMessaging.getInstance().getToken().addOnCompleteListener(task -> {
+            if (!task.isSuccessful() || web == null) return;
+            String token = task.getResult();
+            runOnUiThread(() -> web.evaluateJavascript(
+                    "window.onPushToken && window.onPushToken(" + JSONObject.quote(token) + ")", null));
+        });
     }
 
     private void ensureLocationPermission() {
@@ -286,6 +334,9 @@ public class MainActivity extends AppCompatActivity {
             if (!ok) {
                 Toast.makeText(this, "Location denied — GPS route optimisation is off", Toast.LENGTH_LONG).show();
             }
+        } else if (req == REQ_NOTIFICATIONS) {
+            boolean ok = res.length > 0 && res[0] == PackageManager.PERMISSION_GRANTED;
+            Log.i(TAG, "notification permission: " + (ok ? "granted" : "denied"));
         }
     }
 

@@ -255,17 +255,26 @@ const App = {
   // flow outright — window.PurePak.signInWithGoogle only exists there, and
   // when it does we skip Google's JS entirely and show a plain button that
   // hands off to the native Credential Manager flow instead. Everywhere
-  // else (a real browser) renders Google's own button as usual.
+  // else (a real browser) renders Google's own button as usual. Either way,
+  // if sign-in genuinely isn't available (an older app build without the
+  // native method, or Google's script never loads), the whole section is
+  // removed cleanly rather than left as a dead empty box.
   initGoogleSignIn(attempt = 0) {
     const target = document.getElementById('googleSignInBtn');
     if (!target) return;
+    const removeSection = () => { document.querySelector('.login-divider')?.remove(); target.remove(); };
     if (window.PurePak && typeof window.PurePak.signInWithGoogle === 'function') {
       target.innerHTML = `<button type="button" class="btn ghost block" id="nativeGoogleBtn">Continue with Google</button>`;
       document.getElementById('nativeGoogleBtn').addEventListener('click', () => window.PurePak.signInWithGoogle());
       return;
     }
+    // running inside the app, but an older build that predates native
+    // Google sign-in — Google's web flow is a guaranteed dead end in any
+    // version of this WebView, so don't waste 5s retrying it
+    if (window.PurePak) return removeSection();
     if (!window.google || !window.google.accounts || !window.google.accounts.id) {
       if (attempt < 20) setTimeout(() => this.initGoogleSignIn(attempt + 1), 250);
+      else removeSection();
       return;
     }
     google.accounts.id.initialize({

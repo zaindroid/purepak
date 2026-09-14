@@ -9,8 +9,11 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.SwitchCompat;
+import androidx.biometric.BiometricManager;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
@@ -27,6 +30,7 @@ public class SetupActivity extends AppCompatActivity {
     public static final String PREFS = "purepak";
     public static final String KEY_HOST = "server_host";   // stores a full URL, e.g. https://purepak.zaindroid.me
     public static final String KEY_MANUAL = "server_manual"; // true once the user has explicitly overridden it
+    public static final String KEY_BIOMETRIC_ENABLED = "biometric_enabled";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -74,6 +78,25 @@ public class SetupActivity extends AppCompatActivity {
         btnDefault.setOnClickListener(v -> {
             sp.edit().remove(KEY_HOST).putBoolean(KEY_MANUAL, false).apply();
             goToApp();
+        });
+
+        SwitchCompat swBiometric = findViewById(R.id.swBiometric);
+        boolean hasBiometric = BiometricManager.from(this)
+                .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK | BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                == BiometricManager.BIOMETRIC_SUCCESS;
+        swBiometric.setEnabled(hasBiometric);
+        swBiometric.setChecked(hasBiometric && sp.getBoolean(KEY_BIOMETRIC_ENABLED, false));
+        if (!hasBiometric) {
+            swBiometric.setChecked(false);
+            sp.edit().putBoolean(KEY_BIOMETRIC_ENABLED, false).apply();
+        }
+        swBiometric.setOnCheckedChangeListener((btnView, checked) -> {
+            if (checked && !hasBiometric) {
+                swBiometric.setChecked(false);
+                Toast.makeText(this, "Set up a fingerprint, face, or PIN lock on this phone first", Toast.LENGTH_LONG).show();
+                return;
+            }
+            sp.edit().putBoolean(KEY_BIOMETRIC_ENABLED, checked).apply();
         });
     }
 

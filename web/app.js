@@ -376,6 +376,11 @@ const App = {
 
     // the native shell may have handed us a push token/open-ref before login finished
     if (pendingPushToken) { window.onPushToken(pendingPushToken); pendingPushToken = null; }
+
+    // lets the native app offer "enable fingerprint unlock?" — a no-op
+    // outside the app, and only ever actually prompts once, on whichever
+    // app-entry (fresh login or a restored session) happens to come first
+    if (window.PurePak && typeof window.PurePak.notifyLoggedIn === 'function') window.PurePak.notifyLoggedIn();
     if (pendingPushRef) { const r = pendingPushRef; pendingPushRef = null; setTimeout(() => this.routeByRef(r), 300); }
   },
 

@@ -33,6 +33,8 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.biometric.BiometricManager;
+import androidx.biometric.BiometricPrompt;
 import androidx.credentials.CredentialManager;
 import androidx.credentials.CredentialManagerCallback;
 import androidx.credentials.GetCredentialRequest;
@@ -77,6 +79,12 @@ public class MainActivity extends AppCompatActivity {
     // the server verifies it through the exact same /api/auth/google path
     private static final String GOOGLE_WEB_CLIENT_ID = "674062502521-hc2pc7oan27ru1hkleslofoc6lr5uqbq.apps.googleusercontent.com";
     private final Executor bgExecutor = Executors.newSingleThreadExecutor();
+
+    // fingerprint/face unlock — a local app-open gate, not a second account
+    // credential; the real session still lives in the WebView's own storage.
+    // KEY_BIOMETRIC_ENABLED lives on SetupActivity (its Security toggle owns
+    // the canonical value); this one is asked once, ever, right after login.
+    private static final String KEY_BIOMETRIC_PROMPTED = "biometric_prompted";
 
     private WebView web;
     private ProgressBar pb;
@@ -263,11 +271,26 @@ public class MainActivity extends AppCompatActivity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIFICATIONS);
         }
 
-        // Resolve which server to load. A manual override (set via the
-        // Settings gear, e.g. for local dev on the same Wi-Fi) always wins;
-        // otherwise we ask the live pointer for the current address on every
-        // launch, so moving the backend to a new domain later needs no app
-        // update — see RemoteConfig.
+        // Safety: never leave the user stuck on the splash if the page stalls.
+        splashOverlay.postDelayed(this::dismissSplash, SPLASH_MAX_MS);
+
+        // If fingerprint/face unlock is turned on, the app is a locked box
+        // until that succeeds — nothing below has loaded the web content yet,
+        // so there's nothing sensitive on screen to protect prematurely.
+        SharedPreferences sp = getSharedPreferences(SetupActivity.PREFS, MODE_PRIVATE);
+        if (sp.getBoolean(SetupActivity.KEY_BIOMETRIC_ENABLED, false)) {
+            showBiometricLock(this::resolveAndLoad);
+        } else {
+            resolveAndLoad();
+        }
+    }
+
+    // Resolve which server to load. A manual override (set via the Settings
+    // gear, e.g. for local dev on the same Wi-Fi) always wins; otherwise we
+    // ask the live pointer for the current address on every launch, so
+    // moving the backend to a new domain later needs no app update — see
+    // RemoteConfig. Called only after any biometric lock has cleared.
+    private void resolveAndLoad() {
         SharedPreferences sp = getSharedPreferences(SetupActivity.PREFS, MODE_PRIVATE);
         String cached = sp.getString(SetupActivity.KEY_HOST, "");
         boolean manual = sp.getBoolean(SetupActivity.KEY_MANUAL, false);
@@ -279,9 +302,6 @@ public class MainActivity extends AppCompatActivity {
                 startWithHost(resolved);
             });
         }
-
-        // Safety: never leave the user stuck on the splash if the page stalls.
-        splashOverlay.postDelayed(this::dismissSplash, SPLASH_MAX_MS);
     }
 
     private void startWithHost(String base) {
@@ -351,6 +371,69 @@ public class MainActivity extends AppCompatActivity {
         if (web == null) return;
         String arg = idToken == null ? "null" : JSONObject.quote(idToken);
         web.evaluateJavascript("window.onNativeGoogleSignIn && window.onNativeGoogleSignIn(" + arg + ")", null);
+    }
+
+    // Shows the system fingerprint/face prompt, falling back to the device's
+    // own PIN/pattern (DEVICE_CREDENTIAL) if biometrics aren't set up right
+    // now. If the hardware genuinely isn't usable at all, don't block the
+    // user from their own app over it — just proceed.
+    private void showBiometricLock(Runnable onSuccess) {
+        BiometricManager bm = BiometricManager.from(this);
+        int can = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK | BiometricManager.Authenticators.DEVICE_CREDENTIAL);
+        if (can != BiometricManager.BIOMETRIC_SUCCESS) { onSuccess.run(); return; }
+
+        BiometricPrompt prompt = new BiometricPrompt(this, ContextCompat.getMainExecutor(this),
+                new BiometricPrompt.AuthenticationCallback() {
+                    @Override
+                    public void onAuthenticationSucceeded(@NonNull BiometricPrompt.AuthenticationResult result) {
+                        onSuccess.run();
+                    }
+
+                    @Override
+                    public void onAuthenticationError(int errorCode, @NonNull CharSequence errString) {
+                        // cancelled or locked out — offer a retry rather than
+                        // leave the app stuck on the splash with no way forward
+                        showBiometricRetry(onSuccess);
+                    }
+                });
+        BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Unlock PurePak")
+                .setSubtitle("Verify it's you to continue")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK | BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                .build();
+        prompt.authenticate(info);
+    }
+
+    private void showBiometricRetry(Runnable onSuccess) {
+        new AlertDialog.Builder(this)
+                .setTitle("Unlock required")
+                .setMessage("Verify it's you to continue using PurePak.")
+                .setCancelable(false)
+                .setPositiveButton("Try again", (d, w) -> showBiometricLock(onSuccess))
+                .setNegativeButton("Turn off lock", (d, w) -> {
+                    getSharedPreferences(SetupActivity.PREFS, MODE_PRIVATE).edit()
+                            .putBoolean(SetupActivity.KEY_BIOMETRIC_ENABLED, false).apply();
+                    onSuccess.run();
+                })
+                .show();
+    }
+
+    // Offered exactly once, right after a real login succeeds (see
+    // window.PurePak.notifyLoggedIn(), called from app.js's App.enter()) —
+    // never nags again regardless of the answer.
+    private void maybeOfferBiometricEnable() {
+        SharedPreferences sp = getSharedPreferences(SetupActivity.PREFS, MODE_PRIVATE);
+        if (sp.getBoolean(KEY_BIOMETRIC_PROMPTED, false)) return;
+        BiometricManager bm = BiometricManager.from(this);
+        int can = bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK | BiometricManager.Authenticators.DEVICE_CREDENTIAL);
+        if (can != BiometricManager.BIOMETRIC_SUCCESS) return; // nothing enrolled — don't even ask
+        new AlertDialog.Builder(this)
+                .setTitle("Enable fingerprint unlock?")
+                .setMessage("Next time you open PurePak, verify it's you with your fingerprint or face — so the app isn't left open to anyone who picks up your phone.")
+                .setPositiveButton("Enable", (d, w) -> sp.edit()
+                        .putBoolean(SetupActivity.KEY_BIOMETRIC_ENABLED, true).putBoolean(KEY_BIOMETRIC_PROMPTED, true).apply())
+                .setNegativeButton("Not now", (d, w) -> sp.edit().putBoolean(KEY_BIOMETRIC_PROMPTED, true).apply())
+                .show();
     }
 
     private void ensureLocationPermission() {
@@ -457,7 +540,7 @@ public class MainActivity extends AppCompatActivity {
 
         @android.webkit.JavascriptInterface
         public String version() {
-            return "1.9";
+            return "2.0";
         }
 
         // the page calls this instead of rendering Google's own web button,
@@ -465,6 +548,13 @@ public class MainActivity extends AppCompatActivity {
         @android.webkit.JavascriptInterface
         public void signInWithGoogle() {
             runOnUiThread(MainActivity.this::startGoogleSignIn);
+        }
+
+        // called from app.js's App.enter() every time a login succeeds —
+        // offers the one-time "enable fingerprint unlock" prompt
+        @android.webkit.JavascriptInterface
+        public void notifyLoggedIn() {
+            runOnUiThread(MainActivity.this::maybeOfferBiometricEnable);
         }
     }
 }

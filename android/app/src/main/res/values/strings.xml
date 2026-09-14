@@ -14,4 +14,6 @@
     <string name="perm_body">Live GPS powers the smart route and delivery tracking — riders see their route, and the dashboard shows each delivery in real time.</string>
     <string name="perm_allow">Allow location</string>
     <string name="perm_not_now">Not now</string>
+    <string name="biometric_title">Fingerprint unlock</string>
+    <string name="biometric_hint">Verify it\'s you when opening the app</string>
 </resources>

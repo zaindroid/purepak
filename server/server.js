@@ -3,7 +3,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { init, verifyPassword, hashPassword } = require('./db');
+const zlib = require('zlib');
+const { init, verifyPassword, hashPassword, DB_PATH, RESTORE_PENDING } = require('./db');
 
 const PORT = Number(process.env.PORT || 4310);
 const { db } = init();
@@ -15,6 +16,8 @@ const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
 // admin-uploaded product photos — same persistent-volume reasoning as receipts;
 // the stock bottle shots that ship in web/img/ are separate and never touch this dir
 const PRODUCT_IMG_DIR = path.join(DATA_DIR, 'product-images');
+// rotating on-disk database backups, mailed off-server too — see runBackup()
+const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 // the Android release APK, uploaded once by an admin so the portal can offer
 // a direct "download the app" link — also on the persistent volume
 const APK_DIR = path.join(DATA_DIR, 'app-releases');
@@ -169,20 +172,88 @@ async function sendPush(userIds, title, body, data = {}) {
 // and returns false, so forgot-password still "succeeds" from the caller's
 // point of view (never reveals whether an email is registered) but no mail
 // actually goes out; useful for local dev without needing a real key.
-async function sendEmail(to, subject, html) {
+async function sendEmail(to, subject, html, attachments) {
   const key = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM || 'PurePak <onboarding@resend.dev>';
   if (!key) { console.warn(`[email not configured] would send "${subject}" to ${to}`); return false; }
   try {
+    const body = { from, to, subject, html };
+    if (attachments && attachments.length) body.attachments = attachments; // [{filename, content: base64}]
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-      body: JSON.stringify({ from, to, subject, html }),
+      body: JSON.stringify(body),
     });
     if (!resp.ok) { console.error('Resend send failed:', resp.status, await resp.text().catch(() => '')); return false; }
     return true;
   } catch (e) { console.error('Resend send error:', e.message); return false; }
 }
+
+// ---------- database backups: on-disk rotation + an off-server copy mailed
+// to every admin/manager, so a lost or corrupted volume doesn't mean lost
+// data ----------
+const BACKUP_KEEP_DAYS = 14;
+const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function listBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  return fs.readdirSync(BACKUP_DIR)
+    .filter(f => f.endsWith('.db'))
+    .map(f => {
+      const st = fs.statSync(path.join(BACKUP_DIR, f));
+      return { filename: f, size: st.size, created_at: st.mtime.toISOString() };
+    })
+    .sort((a, b) => b.filename < a.filename ? -1 : 1);
+}
+function pruneOldBackups() {
+  const cutoff = Date.now() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+  for (const f of listBackups()) {
+    if (new Date(f.created_at).getTime() < cutoff) {
+      try { fs.unlinkSync(path.join(BACKUP_DIR, f.filename)); } catch {}
+    }
+  }
+}
+// takes a fresh, consistent snapshot (VACUUM INTO — safe even mid-write,
+// unlike copying the file directly while SQLite's WAL mode is active),
+// rotates old ones out, and emails a gzipped copy off the server entirely
+async function runBackup(trigger = 'scheduled') {
+  if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const filename = `purepak-${stamp}.db`;
+  const dest = path.join(BACKUP_DIR, filename);
+  db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+  pruneOldBackups();
+
+  const buf = fs.readFileSync(dest);
+  const gz = zlib.gzipSync(buf);
+  const admins = db.prepare(`SELECT email FROM users WHERE role IN ('admin','manager') AND status='active'`).all().map(r => r.email).filter(Boolean);
+  let emailed = false;
+  if (!admins.length) {
+    console.warn('backup taken but nobody to email — no active admin/manager has an email on file');
+  } else if (gz.length >= 35 * 1024 * 1024) {
+    console.warn(`backup too large to email (${gz.length} bytes) — download it from the Backups page instead`);
+  } else {
+    const results = await Promise.all(admins.map(to => sendEmail(
+      to, `PurePak database backup — ${stamp}`,
+      `<p>Attached: a full database backup, taken ${trigger === 'manual' ? 'on request' : 'automatically'}.</p>
+       <p>Keep it somewhere safe. To restore it, use the Backups page in the dashboard.</p>`,
+      [{ filename: filename + '.gz', content: gz.toString('base64') }]
+    )));
+    emailed = results.some(Boolean);
+  }
+  db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES ('last_backup_at',?,datetime('now'))
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`).run(new Date().toISOString());
+  return { filename, size: buf.length, emailed, recipients: admins.length };
+}
+async function maybeScheduledBackup() {
+  const last = setting('last_backup_at');
+  if (last && Date.now() - new Date(last).getTime() < BACKUP_INTERVAL_MS) return;
+  try { await runBackup('scheduled'); } catch (e) { console.error('scheduled backup failed:', e.message); }
+}
+// a short delay so a fresh deploy isn't racing its own migrations; then
+// re-check hourly (cheap — it's a no-op unless 24h have actually passed)
+setTimeout(() => { maybeScheduledBackup(); }, 20000);
+setInterval(() => { maybeScheduledBackup(); }, 60 * 60 * 1000);
 
 // ---------- notifications (in-app feed) ----------
 function notify(userIds, kind, title, body, ref) {
@@ -2107,6 +2178,59 @@ async function handleApi(req, res, url) {
     db.prepare('UPDATE receipts SET posted=1, posted_ref=? WHERE id=?').run(lref, rid);
     audit(user, 'receipt.post', 'receipt', rid, `Posted receipt #${rid} to the ledger as entry #${led.id} (Rs ${Math.round(Number(rc.amount))} · ${account})`, { posted: 0 }, { posted: 1, ledger_entry: led.id });
     return json(res, 200, db.prepare('SELECT * FROM receipts WHERE id=?').get(rid));
+  }
+
+  // ---- database backups (admin only) ----
+  if (method === 'GET' && parts[1] === 'backup' && parts[2] === 'list') {
+    requireRole(user, ['admin', 'manager']);
+    return json(res, 200, { backups: listBackups(), last_backup_at: setting('last_backup_at') });
+  }
+  if (method === 'POST' && parts[1] === 'backup' && parts[2] === 'run') {
+    requireRole(user, ['admin', 'manager']);
+    try {
+      const result = await runBackup('manual');
+      audit(user, 'backup.run', 'backup', null, `Manual backup taken (${(result.size / 1024).toFixed(0)} KB)${result.emailed ? ', emailed to ' + result.recipients + ' admin(s)' : ', not emailed'}`, null, result);
+      return json(res, 200, result);
+    } catch (e) { return err(res, 500, 'Backup failed: ' + e.message); }
+  }
+  if (method === 'GET' && parts[1] === 'backup' && parts[2] === 'download' && parts.length === 4) {
+    // a plain <a href> download link can't set an Authorization header —
+    // same ?token= fallback the SSE stream uses
+    let dlUser = user;
+    if (!dlUser) {
+      const qtok = url.searchParams.get('token');
+      if (qtok) dlUser = authUser({ headers: { authorization: 'Bearer ' + qtok } });
+    }
+    requireRole(dlUser, ['admin', 'manager']);
+    const name = decodeURIComponent(parts[3]);
+    if (!/^purepak-[\d-]+\.db$/.test(name)) return err(res, 400, 'Invalid backup filename');
+    const file = path.join(BACKUP_DIR, name);
+    if (!file.startsWith(BACKUP_DIR) || !fs.existsSync(file)) return err(res, 404, 'Backup not found');
+    audit(dlUser, 'backup.download', 'backup', null, `Downloaded backup ${name}`, null, null);
+    res.writeHead(200, {
+      'Content-Type': 'application/x-sqlite3',
+      'Content-Disposition': `attachment; filename="${name}"`,
+      'Cache-Control': 'no-cache',
+    });
+    return fs.createReadStream(file).pipe(res);
+  }
+  // stages an uploaded backup to swap in on the NEXT boot (see
+  // applyPendingRestore in db.js) — never touches the live db file while
+  // this process still holds it open — then restarts the app to apply it.
+  // Coolify/Docker's restart policy brings the process straight back up.
+  if (method === 'POST' && parts[1] === 'backup' && parts[2] === 'restore') {
+    requireRole(user, ['admin']);
+    const b = await readBody(req);
+    const b64 = String(b.db || '');
+    if (!b64) return err(res, 400, 'db file required');
+    const buf = decodeB64(b64);
+    if (buf.length < 100 || buf.toString('utf8', 0, 16) !== 'SQLite format 3\0')
+      return err(res, 400, "That doesn't look like a SQLite database file");
+    fs.writeFileSync(RESTORE_PENDING, buf);
+    audit(user, 'backup.restore', 'backup', null, `Staged a database restore (${(buf.length / 1024).toFixed(0)} KB) — restarting to apply it`, null, null);
+    json(res, 200, { ok: true, message: 'Restore staged — the app is restarting to apply it. Give it about a minute.' });
+    setTimeout(() => process.exit(0), 800); // flush the response first
+    return;
   }
 
   // ---- AI settings (Gemini key) ----

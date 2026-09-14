@@ -6,6 +6,7 @@ window.onViewRender = function (route, view) {
   if (route === 'route' && typeof initSmartRoute === 'function') initSmartRoute();
   if (route === 'home' && typeof initCustomerHome === 'function') initCustomerHome();
   else document.body.classList.remove('has-cartbar'); // storefront-only page padding
+  if (route === 'backups' && typeof initBackupsView === 'function') initBackupsView();
 };
 // toast alias used by views
 window.ppToast = function (msg, cls) { if (window.App) App.toast(msg, cls); };
@@ -583,6 +584,19 @@ const App = {
         break;
       case 'new-agent': stop(); modalAddAgent(); break;
       case 'new-offer': stop(); modalNewOffer(); break;
+      case 'backup-run': stop(); {
+        const el = e.target.closest('[data-act="backup-run"]');
+        el.disabled = true; el.textContent = 'Backing up…';
+        try {
+          const r = await API.runBackup();
+          toast(r.emailed ? `Backup complete — emailed to ${r.recipients} admin(s)` : 'Backup complete (not emailed — no admin email on file)', 'ok');
+          App.refresh();
+        } catch (err) {
+          el.disabled = false; el.textContent = 'Backup now';
+          toast(err.message, 'err');
+        }
+        break;
+      }
       case 'offer-toggle': stop(); {
         const el = e.target.closest('[data-act="offer-toggle"]');
         const active = el.dataset.active === '1';

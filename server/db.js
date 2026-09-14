@@ -10,6 +10,29 @@ const DATA_DIR = process.env.PUREPAK_DATA_DIR || path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = path.join(DATA_DIR, 'purepak.db');
 
+// a restore uploaded through the admin Backups page is staged here rather
+// than swapped in live — the DatabaseSync connection is already open by the
+// time any request could trigger a restore, so applying it happens on the
+// NEXT boot instead, before anything opens the real db file
+const RESTORE_PENDING = path.join(DATA_DIR, 'restore-pending.db');
+function applyPendingRestore() {
+  if (!fs.existsSync(RESTORE_PENDING)) return;
+  const safety = DB_PATH + '.pre-restore-' + Date.now();
+  try {
+    if (fs.existsSync(DB_PATH)) fs.copyFileSync(DB_PATH, safety);
+    // drop the outgoing db's WAL/SHM sidecars first — SQLite replays any
+    // pending frames still sitting in -wal onto whatever file it opens next,
+    // which would silently undo the restore with data from before it
+    for (const suffix of ['-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + suffix); } catch {} }
+    fs.copyFileSync(RESTORE_PENDING, DB_PATH);
+    fs.unlinkSync(RESTORE_PENDING);
+    console.warn('Applied a pending database restore — the previous db was saved as ' + safety);
+  } catch (e) {
+    console.error('Failed to apply pending restore:', e.message);
+    try { fs.unlinkSync(RESTORE_PENDING); } catch {} // don't retry a broken upload forever
+  }
+}
+
 function hashPassword(pw, salt) {
   salt = salt || crypto.randomBytes(16).toString('hex');
   const h = crypto.scryptSync(pw, salt, 64).toString('hex');
@@ -538,6 +561,7 @@ function seedDemo(db) {
 }
 
 function init() {
+  applyPendingRestore();
   const db = open();
   migrate(db);
   seedCatalog(db);
@@ -551,4 +575,4 @@ if (require.main === module) {
   console.log('PurePak DB ready: ' + r.DB_PATH + (r.demo ? (r.seeded ? ' (seeded demo data)' : ' (demo mode)') : ' (clean, no demo data)'));
 }
 
-module.exports = { init, open, hashPassword, verifyPassword, DB_PATH };
+module.exports = { init, open, hashPassword, verifyPassword, DB_PATH, RESTORE_PENDING };

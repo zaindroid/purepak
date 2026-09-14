@@ -25,6 +25,7 @@ const IC = (() => {
     chat: s('<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>', 19),
     mail: s('<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7.5L12 13.5l8.5-6"/>', 19),
     megaphone: s('<path d="M3 10v4a1.5 1.5 0 0 0 1.5 1.5H6l3 5.5v-6"/><path d="M6 10 17.5 4v16L6 14"/><path d="M20.5 9.5a4 4 0 0 1 0 5"/>', 19),
+    database: s('<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>', 19),
   };
 })();
 
@@ -1118,6 +1119,61 @@ async function modalNewOffer() {
       toast('Offer broadcast', 'ok');
       App.refresh();
     } catch (e) { toast(e.message, 'err'); }
+  });
+}
+
+// ---------- database backups (admin/manager view, restore is admin-only) ----------
+async function viewBackups() {
+  const isAdmin = API.user.role === 'admin';
+  const { backups, last_backup_at } = await API.backupList();
+  const fmtSize = (b) => b < 1024 * 1024 ? Math.round(b / 1024) + ' KB' : (b / 1024 / 1024).toFixed(1) + ' MB';
+  return `
+  <div class="page-head"><h1>Backups</h1><button class="btn primary sm" data-act="backup-run">Backup now</button></div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">A full database backup runs automatically every 24 hours, kept here for 14 days, and emailed to every admin/manager so a copy always exists off this server too.</p>
+  <div class="card card-pad" style="margin-bottom:16px">
+    <div class="muted" style="font-size:12.5px">Last backup</div>
+    <div style="font-weight:700;font-size:15px;margin-top:2px">${last_backup_at ? API.fmtDate(last_backup_at) : 'None yet — one runs shortly after the server starts'}</div>
+  </div>
+  ${backups.map(b => `
+    <div class="team-row">
+      <div class="team-av">${IC.database}</div>
+      <div class="team-main">
+        <div class="nm">${API.esc(b.filename)}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">${API.fmtDate(b.created_at)} · ${fmtSize(b.size)}</div>
+      </div>
+      <div class="team-acts" style="flex:none">
+        <a class="btn ghost sm" href="${API.backupDownloadUrl(b.filename)}">Download</a>
+      </div>
+    </div>`).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.database}</div>No backups yet.</div>`}
+  ${isAdmin ? `
+  <div class="sec-t">Restore</div>
+  <div class="card card-pad">
+    <p class="muted" style="font-size:12px;margin:0 0 10px">Replaces the live database with an uploaded backup and restarts the app to apply it — the current data is saved as a safety copy first, but anything created after the backup you're restoring will be lost. If you're restoring from an emailed backup, unzip the .gz file first.</p>
+    <input type="file" id="bkRestoreFile" class="input" accept=".db" style="width:100%;margin-bottom:10px">
+    <button class="btn danger-solid sm" id="bkRestoreBtn">Restore from file</button>
+  </div>` : ''}`;
+}
+function initBackupsView() {
+  const btn = document.getElementById('bkRestoreBtn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const file = document.getElementById('bkRestoreFile').files[0];
+    if (!file) { toast('Choose a .db backup file first', 'warn'); return; }
+    const typed = await confirmDialog({
+      title: 'Restore database?', danger: true, okLabel: 'Restore and restart',
+      message: `This replaces all live data with "${API.esc(file.name)}" and restarts the app. This cannot be undone.`,
+      input: { placeholder: 'RESTORE', required: true, hint: 'Type RESTORE to confirm.' },
+    });
+    if (typed !== 'RESTORE') { if (typed) toast('Type RESTORE exactly to confirm', 'warn'); return; }
+    btn.disabled = true; btn.textContent = 'Restoring…';
+    try {
+      const dbBase64 = await fileToBase64(file);
+      await API.restoreBackup(dbBase64);
+      toast('Restore staged — the app is restarting now. Reload in about a minute.', 'ok');
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Restore from file';
+      toast(e.message, 'err');
+    }
   });
 }
 
@@ -2499,6 +2555,7 @@ const ADMIN_NAV = [
   { to: 'audit', icon: IC.clip, label: 'Audit trail' },
   { to: 'products', icon: IC.bottle, label: 'Products', section: 'Catalog & team' },
   { to: 'team', icon: IC.shield, label: 'Team' },
+  { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
 ];
 // Shop manager: a single-purpose profile that only runs the order pipeline —
 // order received -> confirmed -> dispatched -> delivered. No money, catalog,
@@ -2551,7 +2608,7 @@ const VIEW = {
     customers: viewCustomers,
     agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
-    products: viewProducts,
+    products: viewProducts, backups: viewBackups,
   },
   manager: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
@@ -2559,7 +2616,7 @@ const VIEW = {
     customers: viewCustomers,
     agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
-    products: viewProducts,
+    products: viewProducts, backups: viewBackups,
   },
   finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents },
   agent: { dashboard: viewAgentDashboard, orders: viewOrders, commissions: viewCommissions, receipts: viewReceipts },

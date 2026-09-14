@@ -1,6 +1,10 @@
 'use strict';
 // ---- app shell: routing, auth, actions ----
 
+// Public client ID — safe to embed; Google's own security model relies on
+// the registered origin (purepak.zaindroid.me), not on this being secret.
+const GOOGLE_CLIENT_ID = '674062502521-hc2pc7oan27ru1hkleslofoc6lr5uqbq.apps.googleusercontent.com';
+
 // Post-render hooks: kick off live views (map) after their HTML is in the DOM
 window.onViewRender = function (route, view) {
   if (route === 'route' && typeof initSmartRoute === 'function') initSmartRoute();
@@ -146,6 +150,7 @@ const App = {
     window.addEventListener('hashchange', () => this.render());
 
     this.initAppDownloadLinks();
+    this.initGoogleSignIn();
   },
 
   // shows the "Get the Android app" link (login screen + sidebar) once a
@@ -224,6 +229,36 @@ const App = {
     } catch (err) {
       errEl.textContent = err.message || 'Login failed';
     }
+  },
+
+  async doGoogleSignIn(idToken) {
+    const errEl = document.getElementById('loginErr');
+    if (errEl) errEl.textContent = '';
+    try {
+      const r = await API.googleSignIn(idToken);
+      API.setAuth(r.token, r.user);
+      if (r.first_setup) this.toast('Owner account created — PurePak is ready. Invite your team from the Team screen.', 'ok');
+      if (r.pending) this.showPending(r.user);
+      else this.enter(r.user);
+    } catch (err) {
+      if (errEl) errEl.textContent = err.message || 'Google sign-in failed';
+    }
+  },
+
+  // Google's script loads async — it may not be ready the instant init() runs,
+  // so retry briefly rather than silently never showing the button
+  initGoogleSignIn(attempt = 0) {
+    const target = document.getElementById('googleSignInBtn');
+    if (!target) return;
+    if (!window.google || !window.google.accounts || !window.google.accounts.id) {
+      if (attempt < 20) setTimeout(() => this.initGoogleSignIn(attempt + 1), 250);
+      return;
+    }
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID,
+      callback: (resp) => this.doGoogleSignIn(resp.credential),
+    });
+    google.accounts.id.renderButton(target, { theme: 'outline', size: 'large', width: 300, text: 'continue_with' });
   },
 
   showPending(user) {

@@ -911,6 +911,50 @@ async function handleApi(req, res, url) {
     const token = newSession(u);
     return json(res, 200, { token, user: userView(u), pending: false });
   }
+  // ---- "Sign in with Google" — verifies the ID token Google's own Identity
+  // Services JS library hands back client-side, then logs into a matching
+  // account by email or creates a new customer one (mirrors /auth/signup).
+  // No new dependency: tokeninfo is Google's own verification endpoint, so
+  // there's no JWT/JWKS handling to get wrong here.
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'google') {
+    const b = await readBody(req);
+    const idToken = String(b.id_token || '');
+    if (!idToken) return err(res, 400, 'Missing id_token');
+    let payload;
+    try {
+      const resp = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken));
+      payload = await resp.json();
+      if (!resp.ok || payload.error) return err(res, 401, 'Could not verify Google sign-in');
+    } catch { return err(res, 401, 'Could not verify Google sign-in'); }
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (clientId && payload.aud !== clientId) return err(res, 401, 'That sign-in was not issued for this app');
+    if (payload.email_verified !== 'true' && payload.email_verified !== true) return err(res, 401, 'Your Google email is not verified');
+    const email = String(payload.email || '').trim().toLowerCase();
+    if (!email) return err(res, 401, 'No email on that Google account');
+
+    let u = db.prepare(`SELECT * FROM users WHERE email=? AND active=1`).get(email);
+    if (!u) {
+      const name = String(payload.name || email.split('@')[0]).trim().slice(0, 80);
+      const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+      const role = userCount === 0 ? 'admin' : 'customer'; // same "first account owns it" rule as /auth/signup
+      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      let custId = null;
+      if (role === 'customer') {
+        custId = Number(db.prepare('INSERT INTO customers(name,phone,type) VALUES (?,?,?)').run(name, '', 'retail').lastInsertRowid);
+      }
+      // Google already proved they own this email — a random, never-typed
+      // password hash is fine; this account only ever signs in via Google
+      const ur = db.prepare(`INSERT INTO users(name,email,phone,password_hash,role,agent_id,customer_id,status,created_at)
+                              VALUES (?,?,?,?,?,?,?,?,?)`)
+        .run(name, email, null, hashPassword(crypto.randomBytes(24).toString('hex')), role, null, custId, 'active', now);
+      u = db.prepare('SELECT * FROM users WHERE id=?').get(Number(ur.lastInsertRowid));
+      return json(res, 201, { token: newSession(u), user: userView(u), pending: false, first_setup: role === 'admin' });
+    }
+    if (u.status === 'disabled') return err(res, 401, 'Account disabled — contact your manager');
+    if (u.status === 'pending') return json(res, 200, { token: newSession(u), user: userView(u), pending: true });
+    db.prepare(`UPDATE users SET last_login_at=? WHERE id=?`).run(new Date().toISOString().slice(0, 19).replace('T', ' '), u.id);
+    return json(res, 200, { token: newSession(u), user: userView(u), pending: false });
+  }
   // ---- self-service "forgot password" (separate from a manager resetting
   // someone else's password in-app, further down at /users/:id/reset-password) ----
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'forgot-password') {

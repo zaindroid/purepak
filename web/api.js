@@ -50,6 +50,7 @@ const API = (() => {
     signup: (b) => post('/auth/signup', b),
     forgotPassword: (email) => post('/auth/forgot-password', { email }),
     resetPassword: (token, password) => post('/auth/reset-password', { token, password }),
+    googleSignIn: (idToken) => post('/auth/google', { id_token: idToken }),
     me: () => g('/auth/me'),
     // team / users
     users: () => g('/users'),

@@ -1028,12 +1028,19 @@ async function viewOffers() {
   <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Broadcasts a notification and a storefront banner to every customer — and shows on the QR ordering page too. It's just a message: prices don't change here, set those in <b>Products</b>.</p>
   ${offers.map(o => {
     const st = offerStatus(o);
+    const bits = [];
+    if (o.customer_type) bits.push(o.customer_type[0].toUpperCase() + o.customer_type.slice(1) + ' customers');
+    if (o.min_orders) bits.push(`${o.min_orders}+ orders`);
+    if (o.min_days_since_signup) bits.push(`customer ${o.min_days_since_signup}+ days`);
+    if (o.inactive_days) bits.push(`inactive ${o.inactive_days}+ days`);
+    const targeting = bits.length ? bits.join(' · ') : 'Every active customer';
     return `<div class="team-row">
       <div class="team-av">${IC.megaphone}</div>
       <div class="team-main">
         <div class="nm">${API.esc(o.title)} <span class="chip ${st.cls}">${st.label}</span></div>
         <div class="sub">${API.esc(o.body)}</div>
         <div class="muted" style="font-size:11px;margin-top:3px">by ${API.esc(o.created_by || '—')} · ${API.fmtDay(o.created_at)}${o.ends_at ? ' · ends ' + API.fmtDay(o.ends_at) : ''}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">Audience: ${API.esc(targeting)}${o.audience_count != null ? ` · reached ${o.audience_count}` : ''}</div>
       </div>
       <div class="team-acts" style="flex:none">
         <button class="btn ghost sm" data-act="offer-toggle" data-id="${o.id}" data-active="${o.active ? 0 : 1}">${o.active ? 'Turn off' : 'Turn on'}</button>
@@ -1042,7 +1049,8 @@ async function viewOffers() {
     </div>`;
   }).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.megaphone}</div>No offers yet — "+ New offer" announces something to every customer.</div>`}`;
 }
-function modalNewOffer() {
+async function modalNewOffer() {
+  const types = await API.customerTypes().catch(() => []);
   openModal('New offer', `
     <div class="modal-bd">
       <label class="muted">Title</label>
@@ -1050,20 +1058,64 @@ function modalNewOffer() {
       <label class="muted">Message</label>
       <textarea id="ofBody" class="input" style="width:100%;margin-bottom:10px;min-height:80px" placeholder="What's the offer? Keep it short and clear." maxlength="500"></textarea>
       <label class="muted">Ends on (optional)</label>
-      <input id="ofEnds" type="date" class="input" style="width:100%">
-      <p class="muted" style="font-size:11.5px;margin-top:10px">Broadcasts immediately to every active customer and shows as a banner on the Shop page and the QR ordering page until you turn it off (or the end date passes).</p>
+      <input id="ofEnds" type="date" class="input" style="width:100%;margin-bottom:14px">
+
+      <div class="sec-t" style="margin-top:0">Audience</div>
+      <p class="muted" style="font-size:11.5px;margin:0 0 10px">Leave anything blank to skip that filter. All filters combine — a customer must match every one you set.</p>
+      <div class="row2" style="margin-bottom:10px">
+        <div class="field" style="margin:0">
+          <span>Customer type</span>
+          <select id="ofType"><option value="">Any type</option>${types.map(t => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}</select>
+        </div>
+        <div class="field" style="margin:0">
+          <span>Min. orders placed</span>
+          <input id="ofMinOrders" class="input" type="number" min="1" placeholder="e.g. 5 for loyal customers">
+        </div>
+      </div>
+      <div class="row2" style="margin-bottom:10px">
+        <div class="field" style="margin:0">
+          <span>Customer for at least (days)</span>
+          <input id="ofMinAge" class="input" type="number" min="1" placeholder="e.g. 90">
+        </div>
+        <div class="field" style="margin:0">
+          <span>Hasn't ordered in (days)</span>
+          <input id="ofInactive" class="input" type="number" min="1" placeholder="e.g. 30 to win back">
+        </div>
+      </div>
+      <div class="pay-hint active" id="ofAudience" style="margin-bottom:4px">Reaches every active customer</div>
     </div>`,
     `<button class="btn ghost" data-close-modal>Cancel</button>
      <button class="btn primary" id="ofSubmit">Broadcast now</button>`);
+
+  const filterInputs = ['ofType', 'ofMinOrders', 'ofMinAge', 'ofInactive'].map(id => document.getElementById(id));
+  const currentFilters = () => ({
+    customer_type: document.getElementById('ofType').value || undefined,
+    min_orders: document.getElementById('ofMinOrders').value || undefined,
+    min_days_since_signup: document.getElementById('ofMinAge').value || undefined,
+    inactive_days: document.getElementById('ofInactive').value || undefined,
+  });
+  let audienceSeq = 0;
+  const refreshAudience = async () => {
+    const seq = ++audienceSeq;
+    const el = document.getElementById('ofAudience');
+    el.textContent = 'Checking audience…';
+    try {
+      const { count } = await API.offerAudienceCount(currentFilters());
+      if (seq !== audienceSeq) return; // a newer request already superseded this one
+      el.textContent = count === 0 ? 'Matches no one right now — loosen a filter' : `Reaches ${count} customer${count === 1 ? '' : 's'} right now`;
+    } catch { if (seq === audienceSeq) el.textContent = 'Reaches every active customer'; }
+  };
+  filterInputs.forEach(el => el.addEventListener('input', refreshAudience));
+
   document.getElementById('ofSubmit').addEventListener('click', async () => {
     const title = document.getElementById('ofTitle').value.trim();
     const body = document.getElementById('ofBody').value.trim();
     const ends = document.getElementById('ofEnds').value;
     if (title.length < 2 || body.length < 2) { toast('Add a title and a message', 'warn'); return; }
     try {
-      await API.createOffer({ title, body, ends_at: ends ? ends + ' 23:59:59' : null });
+      await API.createOffer({ title, body, ends_at: ends ? ends + ' 23:59:59' : null, ...currentFilters() });
       closeModal();
-      toast('Offer broadcast to every customer', 'ok');
+      toast('Offer broadcast', 'ok');
       App.refresh();
     } catch (e) { toast(e.message, 'err'); }
   });

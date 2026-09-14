@@ -289,8 +289,8 @@ function applyOrderPayment(actor, oid, cur, paidRaw, methodRaw, memo) {
   if (inc > 0) {
     const cu = db.prepare('SELECT u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
     if (cu && cu.uid) notify([cu.uid], 'order',
-      payStatus === 'paid' ? `Payment received · Order #${oid}` : `Part payment received · Order #${oid}`,
-      `Rs ${Math.round(inc)} received ${via}. ${payStatus === 'paid' ? 'Your order is fully paid.' : 'Rs ' + Math.round(cur.total - paid) + ' still due.'}`,
+      payStatus === 'paid' ? 'Payment received — thank you!' : 'Part payment received',
+      `We've received Rs ${Math.round(inc)} ${via} for your ${orderItemsSummary(oid)}. ${payStatus === 'paid' ? "You're all paid up." : 'Rs ' + Math.round(cur.total - paid) + ' still due.'}`,
       `order#${oid}`);
   }
   return { paid, payStatus, method };
@@ -354,6 +354,20 @@ const Q = {
                   (SELECT d.delivered_at FROM deliveries d WHERE d.order_id=o.id AND d.status='delivered' ORDER BY d.id DESC LIMIT 1) AS delivered_at
            FROM orders o JOIN customers c ON c.id=o.customer_id LEFT JOIN agents a ON a.id=o.agent_id`,
 };
+
+// what a customer actually ordered, in their own words — used in every
+// customer-facing notification instead of the bare order id, which is a
+// global counter shared across every customer and reads as an arbitrary,
+// unexplained number to any one of them ("order #22" when they've only
+// ever placed 3). Staff/agent/driver notifications keep the id — they
+// genuinely use it to look the order up.
+function orderItemsSummary(orderId) {
+  const rows = db.prepare(`SELECT p.name, oi.qty FROM order_items oi JOIN products p ON p.id=oi.product_id WHERE oi.order_id=? ORDER BY oi.id`).all(orderId);
+  if (!rows.length) return 'your order';
+  if (rows.length === 1) return `${rows[0].qty}× ${rows[0].name}`;
+  const units = rows.reduce((s, r) => s + r.qty, 0);
+  return `${units} bottles (${rows.map(r => `${r.qty}× ${r.name}`).join(', ')})`;
+}
 
 function listOrders(filter = {}) {
   let sql = Q.orders + ' WHERE 1=1';
@@ -687,25 +701,85 @@ function officeUserIds() {
   // company accounts + every agent's login — the people who act on orders/customers
   return db.prepare(`SELECT id FROM users WHERE status='active' AND (role IN ('admin','manager','shop_manager','finance') OR agent_id IS NOT NULL)`).all().map(r => r.id);
 }
-// offers currently live: active, and inside their (optional) start/end window
-function activeOffers() {
+// shared WHERE-fragment for offer audience targeting, against a `customers c`
+// alias — every filter is optional (null = no restriction on that dimension),
+// so an offer with none set still matches everyone, exactly like before
+// targeting existed. Used both to pull the full matching audience at
+// broadcast time and to check a single viewer for the storefront banner, so
+// the two can never disagree about who an offer applies to.
+function offerFilterSql(f) {
+  let sql = '1=1';
+  const args = [];
+  if (f.customer_type) { sql += ' AND c.type=?'; args.push(f.customer_type); }
+  if (f.min_days_since_signup) { sql += ` AND c.created_at <= datetime('now', ?)`; args.push('-' + f.min_days_since_signup + ' days'); }
+  if (f.min_orders) {
+    sql += ` AND (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.status != 'cancelled') >= ?`;
+    args.push(f.min_orders);
+  }
+  if (f.inactive_days) {
+    sql += ` AND COALESCE((SELECT MAX(o.placed_at) FROM orders o WHERE o.customer_id=c.id AND o.status != 'cancelled'), '1970-01-01 00:00:00') <= datetime('now', ?)`;
+    args.push('-' + f.inactive_days + ' days');
+  }
+  return { sql, args };
+}
+// normalizes/validates the raw targeting fields an offer request sends —
+// every field optional; an invalid or blank value is just dropped rather
+// than rejected, so a typo degrades to "no restriction" instead of a 400
+function offerFiltersFromBody(b) {
+  const f = {};
+  if (b.customer_type) {
+    const valid = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
+    if (valid.includes(b.customer_type)) f.customer_type = b.customer_type;
+  }
+  const posInt = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n > 0 ? n : null; };
+  if (posInt(b.min_orders)) f.min_orders = posInt(b.min_orders);
+  if (posInt(b.min_days_since_signup)) f.min_days_since_signup = posInt(b.min_days_since_signup);
+  if (posInt(b.inactive_days)) f.inactive_days = posInt(b.inactive_days);
+  return f;
+}
+function offerHasFilters(o) {
+  return !!(o.customer_type || o.min_orders || o.min_days_since_signup || o.inactive_days);
+}
+// every active customer login matching an offer's targeting filters
+function offerAudienceUserIds(filters) {
+  const { sql, args } = offerFilterSql(filters);
+  return db.prepare(`SELECT u.id FROM customers c JOIN users u ON u.customer_id=c.id AND u.status='active' WHERE ${sql}`)
+    .all(...args).map(r => r.id);
+}
+// does this one customer fall inside an offer's targeting? — used for the
+// storefront/guest banner, where we're checking one viewer, not broadcasting
+function customerMatchesOffer(customerId, o) {
+  if (!offerHasFilters(o)) return true;
+  const { sql, args } = offerFilterSql(o);
+  return !!db.prepare(`SELECT 1 FROM customers c WHERE c.id=? AND ${sql}`).get(customerId, ...args);
+}
+// offers currently live: active, inside their (optional) start/end window,
+// and — when we know who's asking — matching that customer's targeting.
+// customerId is null for the public/guest page, which can only ever be
+// shown untargeted offers since there's no customer to evaluate filters against.
+function activeOffers(customerId) {
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-  return db.prepare(`SELECT id, title, body FROM offers WHERE active=1
+  const rows = db.prepare(`SELECT id, title, body, customer_type, min_orders, min_days_since_signup, inactive_days FROM offers WHERE active=1
                       AND (starts_at IS NULL OR starts_at <= ?)
                       AND (ends_at IS NULL OR ends_at >= ?)
                       ORDER BY id DESC`).all(now, now);
+  const visible = customerId
+    ? rows.filter(o => customerMatchesOffer(customerId, o))
+    : rows.filter(o => !offerHasFilters(o));
+  return visible.map(({ id, title, body }) => ({ id, title, body }));
 }
-// notify every customer + nudge open storefronts/QR pages — but only if the
-// offer isn't scheduled to start later (a future-dated offer stays quiet
-// until its start time; there's no scheduler here, so it'll actually start
-// showing once someone loads the banner after that moment, just without the
-// push notification having fired yet)
-function broadcastOfferIfLive(offerId, title, body, startsAt, endsAt) {
+// notify every matching customer + nudge open storefronts/QR pages — but
+// only if the offer isn't scheduled to start later (a future-dated offer
+// stays quiet until its start time; there's no scheduler here, so it'll
+// actually start showing once someone loads the banner after that moment,
+// just without the push notification having fired yet)
+function broadcastOfferIfLive(offerId, title, body, startsAt, endsAt, filters = {}) {
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
   if (startsAt && startsAt > now) return;
   if (endsAt && endsAt < now) return;
-  const customerIds = db.prepare(`SELECT id FROM users WHERE role='customer' AND status='active'`).all().map(r => r.id);
+  const customerIds = offerAudienceUserIds(filters);
   notify(customerIds, 'offer', title, body, 'offer#' + offerId);
+  db.prepare('UPDATE offers SET audience_count=? WHERE id=?').run(customerIds.length, offerId);
   sseBroadcast('offer');
 }
 function sseOpen(userId, res) {
@@ -982,7 +1056,15 @@ async function handleApi(req, res, url) {
   // touch pricing, which staff still change in Products & pricing. ----
   if (method === 'GET' && parts[1] === 'offers' && parts[2] === 'active') {
     if (!user) return err(res, 401, 'Not authenticated');
-    return json(res, 200, activeOffers());
+    return json(res, 200, activeOffers(user.customer_id));
+  }
+  // preview how many customers a set of targeting filters would currently
+  // reach, before actually creating/broadcasting the offer
+  if (method === 'POST' && parts[1] === 'offers' && parts[2] === 'audience-count') {
+    requireRole(user, ['admin', 'manager']);
+    const b = await readBody(req);
+    const filters = offerFiltersFromBody(b);
+    return json(res, 200, { count: offerAudienceUserIds(filters).length });
   }
   if (method === 'GET' && parts[1] === 'offers' && parts.length === 2) {
     requireRole(user, ['admin', 'manager']);
@@ -997,11 +1079,13 @@ async function handleApi(req, res, url) {
     if (body.length < 2) return err(res, 400, 'Please enter a message');
     const startsAt = b.starts_at ? String(b.starts_at).slice(0, 19).replace('T', ' ') : null;
     const endsAt = b.ends_at ? String(b.ends_at).slice(0, 19).replace('T', ' ') : null;
-    const r = db.prepare(`INSERT INTO offers(title,body,active,starts_at,ends_at,created_by) VALUES (?,?,1,?,?,?)`)
-      .run(title, body, startsAt, endsAt, user.name);
+    const filters = offerFiltersFromBody(b);
+    const r = db.prepare(`INSERT INTO offers(title,body,active,starts_at,ends_at,created_by,customer_type,min_orders,min_days_since_signup,inactive_days)
+                          VALUES (?,?,1,?,?,?,?,?,?,?)`)
+      .run(title, body, startsAt, endsAt, user.name, filters.customer_type || null, filters.min_orders || null, filters.min_days_since_signup || null, filters.inactive_days || null);
     const offerId = Number(r.lastInsertRowid);
-    audit(user, 'offer.create', 'offer', offerId, `New offer: ${title}`, null, { title, body, starts_at: startsAt, ends_at: endsAt });
-    broadcastOfferIfLive(offerId, title, body, startsAt, endsAt);
+    audit(user, 'offer.create', 'offer', offerId, `New offer: ${title}`, null, { title, body, starts_at: startsAt, ends_at: endsAt, ...filters });
+    broadcastOfferIfLive(offerId, title, body, startsAt, endsAt, filters);
     return json(res, 201, db.prepare('SELECT * FROM offers WHERE id=?').get(offerId));
   }
   if (method === 'PATCH' && parts[1] === 'offers' && parts.length === 3 && !isNaN(+parts[2])) {
@@ -1015,8 +1099,12 @@ async function handleApi(req, res, url) {
     const body = b.body !== undefined ? (String(b.body).trim().slice(0, 500) || cur.body) : cur.body;
     db.prepare('UPDATE offers SET active=?, title=?, body=? WHERE id=?').run(active, title, body, oid);
     if (active && !cur.active) {
-      // re-activating is a deliberate re-announce, not a silent flip
-      broadcastOfferIfLive(oid, title, body, cur.starts_at, cur.ends_at);
+      // re-activating is a deliberate re-announce, not a silent flip — keeps
+      // whatever targeting it was created with
+      broadcastOfferIfLive(oid, title, body, cur.starts_at, cur.ends_at, {
+        customer_type: cur.customer_type, min_orders: cur.min_orders,
+        min_days_since_signup: cur.min_days_since_signup, inactive_days: cur.inactive_days,
+      });
     } else {
       sseBroadcast('offer'); // tell open storefronts/order pages to re-check the banner
     }
@@ -1397,7 +1485,13 @@ async function handleApi(req, res, url) {
         const cust = db.prepare('SELECT c.*, u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?').get(cur.customer_id);
         const titles = { confirmed: 'Order confirmed', in_delivery: 'Out for delivery', delivered: 'Delivered', cancelled: 'Order cancelled' };
         if (cust && cust.uid) {
-          const bodies = { confirmed: `Order #${oid} has been confirmed.`, in_delivery: `Order #${oid} is out for delivery.`, delivered: `Order #${oid} has been delivered.`, cancelled: `Order #${oid} was cancelled.` };
+          const summary = orderItemsSummary(oid);
+          const bodies = {
+            confirmed: `Good news — your ${summary} is confirmed and being prepared for delivery.`,
+            in_delivery: `Your ${summary} just left for delivery.`,
+            delivered: `Your ${summary} has been delivered. Thank you for choosing PurePak!`,
+            cancelled: `Your ${summary} was cancelled. Message us on WhatsApp if this wasn't expected.`,
+          };
           const t = titles[b.status];
           if (t) notify([cust.uid], 'order', t, bodies[b.status], `order#${oid}`);
         }
@@ -1514,10 +1608,11 @@ async function handleApi(req, res, url) {
       const ord = db.prepare('SELECT customer_id, agent_id FROM orders WHERE id=?').get(cur.order_id);
       const custU = db.prepare(`SELECT u.id AS uid FROM customers c LEFT JOIN users u ON u.customer_id=c.id WHERE c.id=?`).get(ord.customer_id);
       const T = { out_for_delivery: 'Out for delivery', delivered: 'Delivered', failed: 'Delivery could not be completed' };
+      const summary = orderItemsSummary(cur.order_id);
       const B = {
-        out_for_delivery: `Your water order #${cur.order_id} is on the way.`,
-        delivered: `Your water order #${cur.order_id} has been delivered.`,
-        failed: `Delivery of order #${cur.order_id} was not completed. Our team will follow up.`,
+        out_for_delivery: `Your ${summary} is on the way.`,
+        delivered: `Your ${summary} has been delivered. Thank you for choosing PurePak!`,
+        failed: `We couldn't deliver your ${summary} today. Our team will follow up to reschedule.`,
       };
       const cust = db.prepare('SELECT name FROM customers WHERE id=?').get(ord.customer_id) || {};
       if (custU && custU.uid) notify([custU.uid], 'order', T[next], B[next], `order#${cur.order_id}`);

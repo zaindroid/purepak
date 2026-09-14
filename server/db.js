@@ -275,6 +275,16 @@ function migrate(db) {
   const pcols = db.prepare(`PRAGMA table_info(products)`).all().map(c => c.name);
   if (!pcols.includes('image_url')) db.exec('ALTER TABLE products ADD COLUMN image_url TEXT');
 
+  // offer targeting — every column nullable/optional; null means "no
+  // restriction on this dimension" so an old offer with none set still
+  // broadcasts to everyone, exactly as it always did
+  const offerCols = db.prepare(`PRAGMA table_info(offers)`).all().map(c => c.name);
+  if (!offerCols.includes('customer_type')) db.exec('ALTER TABLE offers ADD COLUMN customer_type TEXT');
+  if (!offerCols.includes('min_orders')) db.exec('ALTER TABLE offers ADD COLUMN min_orders INTEGER');
+  if (!offerCols.includes('min_days_since_signup')) db.exec('ALTER TABLE offers ADD COLUMN min_days_since_signup INTEGER');
+  if (!offerCols.includes('inactive_days')) db.exec('ALTER TABLE offers ADD COLUMN inactive_days INTEGER');
+  if (!offerCols.includes('audience_count')) db.exec('ALTER TABLE offers ADD COLUMN audience_count INTEGER');
+
   // data repair: order_items.qty is INTEGER, and a stray huge value (e.g. a
   // mis-typed quantity submitted before the server-side clamp existed) blows
   // past Number.MAX_SAFE_INTEGER — node:sqlite throws RangeError trying to

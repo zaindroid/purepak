@@ -84,6 +84,7 @@ const API = (() => {
     unregisterDeviceToken: (token) => req('DELETE', '/device-token', { token }),
     uploadAndroidApk: (b) => post('/admin/app/android', b),
     createOffer: (b) => post('/offers', b),
+    offerAudienceCount: (filters) => post('/offers/audience-count', filters),
     updateOffer: (id, b) => patch('/offers/' + id, b),
     deleteOffer: (id) => del('/offers/' + id),
     deliveries: (status) => g('/deliveries' + (status ? '?status=' + status : '')),

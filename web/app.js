@@ -36,6 +36,12 @@ window.onPushOpen = function (ref) {
   if (API.user && window.App) window.App.routeByRef(ref);
   else pendingPushRef = ref;
 };
+// native Credential Manager hands the ID token back this way (see
+// MainActivity.startGoogleSignIn) — null means the user cancelled/it failed,
+// so there's nothing to do but let them try again
+window.onNativeGoogleSignIn = function (idToken) {
+  if (idToken && window.App) window.App.doGoogleSignIn(idToken);
+};
 
 // Count-up on KPI values after a view renders (skips on reduced-motion)
 function animateKPIs(root) {
@@ -245,11 +251,19 @@ const App = {
     }
   },
 
-  // Google's script loads async — it may not be ready the instant init() runs,
-  // so retry briefly rather than silently never showing the button
+  // Inside the Android app (a WebView), Google refuses its own web sign-in
+  // flow outright — window.PurePak.signInWithGoogle only exists there, and
+  // when it does we skip Google's JS entirely and show a plain button that
+  // hands off to the native Credential Manager flow instead. Everywhere
+  // else (a real browser) renders Google's own button as usual.
   initGoogleSignIn(attempt = 0) {
     const target = document.getElementById('googleSignInBtn');
     if (!target) return;
+    if (window.PurePak && typeof window.PurePak.signInWithGoogle === 'function') {
+      target.innerHTML = `<button type="button" class="btn ghost block" id="nativeGoogleBtn">Continue with Google</button>`;
+      document.getElementById('nativeGoogleBtn').addEventListener('click', () => window.PurePak.signInWithGoogle());
+      return;
+    }
     if (!window.google || !window.google.accounts || !window.google.accounts.id) {
       if (attempt < 20) setTimeout(() => this.initGoogleSignIn(attempt + 1), 250);
       return;

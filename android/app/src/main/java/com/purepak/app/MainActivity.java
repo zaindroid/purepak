@@ -33,7 +33,14 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.credentials.CredentialManager;
+import androidx.credentials.CredentialManagerCallback;
+import androidx.credentials.GetCredentialRequest;
+import androidx.credentials.GetCredentialResponse;
+import androidx.credentials.exceptions.GetCredentialException;
 
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption;
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
 import com.google.firebase.messaging.FirebaseMessaging;
 
 import org.json.JSONObject;
@@ -42,6 +49,8 @@ import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /**
  * Hosts the PurePak web dashboard in a native WebView.
@@ -61,6 +70,13 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "PurePak";
     private static final int REQ_LOCATION = 42;
+
+    // same Web client ID the website's Google Sign-In button uses — Credential
+    // Manager authenticates natively (Google blocks its OAuth flow inside a
+    // WebView) but still requests an ID token audienced to this client, so
+    // the server verifies it through the exact same /api/auth/google path
+    private static final String GOOGLE_WEB_CLIENT_ID = "674062502521-hc2pc7oan27ru1hkleslofoc6lr5uqbq.apps.googleusercontent.com";
+    private final Executor bgExecutor = Executors.newSingleThreadExecutor();
 
     private WebView web;
     private ProgressBar pb;
@@ -302,6 +318,41 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    // triggered from the page (window.PurePak.signInWithGoogle(), see Bridge
+    // below) when it detects it's running inside this app instead of a plain
+    // browser tab, since Google refuses its own web sign-in flow in a WebView
+    private void startGoogleSignIn() {
+        CredentialManager cm = CredentialManager.create(this);
+        GetSignInWithGoogleOption option = new GetSignInWithGoogleOption.Builder(GOOGLE_WEB_CLIENT_ID).build();
+        GetCredentialRequest request = new GetCredentialRequest.Builder().addCredentialOption(option).build();
+        cm.getCredentialAsync(this, request, new android.os.CancellationSignal(), bgExecutor,
+                new CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
+                    @Override
+                    public void onResult(GetCredentialResponse result) {
+                        String idToken = null;
+                        try {
+                            idToken = GoogleIdTokenCredential.createFrom(result.getCredential().getData()).getIdToken();
+                        } catch (Exception e) {
+                            Log.e(TAG, "Google credential parse failed", e);
+                        }
+                        final String tok = idToken;
+                        runOnUiThread(() -> sendGoogleTokenToPage(tok));
+                    }
+
+                    @Override
+                    public void onError(@NonNull GetCredentialException e) {
+                        Log.w(TAG, "Google sign-in cancelled/failed: " + e.getMessage());
+                        runOnUiThread(() -> sendGoogleTokenToPage(null));
+                    }
+                });
+    }
+
+    private void sendGoogleTokenToPage(String idToken) {
+        if (web == null) return;
+        String arg = idToken == null ? "null" : JSONObject.quote(idToken);
+        web.evaluateJavascript("window.onNativeGoogleSignIn && window.onNativeGoogleSignIn(" + arg + ")", null);
+    }
+
     private void ensureLocationPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -406,7 +457,14 @@ public class MainActivity extends AppCompatActivity {
 
         @android.webkit.JavascriptInterface
         public String version() {
-            return "1.8";
+            return "1.9";
+        }
+
+        // the page calls this instead of rendering Google's own web button,
+        // once it detects window.PurePak.signInWithGoogle exists
+        @android.webkit.JavascriptInterface
+        public void signInWithGoogle() {
+            runOnUiThread(MainActivity.this::startGoogleSignIn);
         }
     }
 }

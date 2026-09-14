@@ -37,10 +37,13 @@ window.onPushOpen = function (ref) {
   else pendingPushRef = ref;
 };
 // native Credential Manager hands the ID token back this way (see
-// MainActivity.startGoogleSignIn) — null means the user cancelled/it failed,
-// so there's nothing to do but let them try again
-window.onNativeGoogleSignIn = function (idToken) {
-  if (idToken && window.App) window.App.doGoogleSignIn(idToken);
+// MainActivity.startGoogleSignIn) — a null token means it was cancelled or
+// failed; surface whatever detail Android gave us rather than silently
+// dumping the user back on the login screen with no explanation
+window.onNativeGoogleSignIn = function (idToken, errorMsg) {
+  if (idToken && window.App) { window.App.doGoogleSignIn(idToken); return; }
+  const el = document.getElementById('loginErr');
+  if (el) el.textContent = errorMsg ? 'Google sign-in: ' + errorMsg : 'Google sign-in was cancelled';
 };
 
 // Count-up on KPI values after a view renders (skips on reduced-motion)

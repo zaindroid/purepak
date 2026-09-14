@@ -350,27 +350,32 @@ public class MainActivity extends AppCompatActivity {
                     @Override
                     public void onResult(GetCredentialResponse result) {
                         String idToken = null;
+                        String err = null;
                         try {
                             idToken = GoogleIdTokenCredential.createFrom(result.getCredential().getData()).getIdToken();
                         } catch (Exception e) {
                             Log.e(TAG, "Google credential parse failed", e);
+                            err = "Credential parse failed: " + e.getClass().getSimpleName() + " — " + e.getMessage();
                         }
                         final String tok = idToken;
-                        runOnUiThread(() -> sendGoogleTokenToPage(tok));
+                        final String errMsg = err;
+                        runOnUiThread(() -> sendGoogleTokenToPage(tok, errMsg));
                     }
 
                     @Override
                     public void onError(@NonNull GetCredentialException e) {
-                        Log.w(TAG, "Google sign-in cancelled/failed: " + e.getMessage());
-                        runOnUiThread(() -> sendGoogleTokenToPage(null));
+                        Log.w(TAG, "Google sign-in cancelled/failed: " + e.getClass().getSimpleName() + " — " + e.getMessage());
+                        final String errMsg = e.getClass().getSimpleName() + ": " + e.getMessage();
+                        runOnUiThread(() -> sendGoogleTokenToPage(null, errMsg));
                     }
                 });
     }
 
-    private void sendGoogleTokenToPage(String idToken) {
+    private void sendGoogleTokenToPage(String idToken, String errorMsg) {
         if (web == null) return;
-        String arg = idToken == null ? "null" : JSONObject.quote(idToken);
-        web.evaluateJavascript("window.onNativeGoogleSignIn && window.onNativeGoogleSignIn(" + arg + ")", null);
+        String tokArg = idToken == null ? "null" : JSONObject.quote(idToken);
+        String errArg = errorMsg == null ? "null" : JSONObject.quote(errorMsg);
+        web.evaluateJavascript("window.onNativeGoogleSignIn && window.onNativeGoogleSignIn(" + tokArg + "," + errArg + ")", null);
     }
 
     // Shows the system fingerprint/face prompt, falling back to the device's
@@ -540,7 +545,7 @@ public class MainActivity extends AppCompatActivity {
 
         @android.webkit.JavascriptInterface
         public String version() {
-            return "2.0";
+            return "2.1";
         }
 
         // the page calls this instead of rendering Google's own web button,

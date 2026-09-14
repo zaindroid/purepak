@@ -351,11 +351,16 @@ public class MainActivity extends AppCompatActivity {
                     public void onResult(GetCredentialResponse result) {
                         String idToken = null;
                         String err = null;
+                        String credType = "?";
                         try {
+                            credType = result.getCredential().getType();
                             idToken = GoogleIdTokenCredential.createFrom(result.getCredential().getData()).getIdToken();
+                            if (idToken == null || idToken.isEmpty()) {
+                                err = "Empty ID token (credential type: " + credType + ")";
+                            }
                         } catch (Exception e) {
-                            Log.e(TAG, "Google credential parse failed", e);
-                            err = "Credential parse failed: " + e.getClass().getSimpleName() + " — " + e.getMessage();
+                            Log.e(TAG, "Google credential parse failed, type=" + credType, e);
+                            err = "Parse failed on type " + credType + ": " + e.getClass().getSimpleName() + " — " + e.getMessage();
                         }
                         final String tok = idToken;
                         final String errMsg = err;
@@ -545,7 +550,7 @@ public class MainActivity extends AppCompatActivity {
 
         @android.webkit.JavascriptInterface
         public String version() {
-            return "2.1";
+            return "2.2";
         }
 
         // the page calls this instead of rendering Google's own web button,

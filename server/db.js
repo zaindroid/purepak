@@ -631,4 +631,4 @@ if (require.main === module) {
   console.log('PurePak DB ready: ' + r.DB_PATH + (r.demo ? (r.seeded ? ' (seeded demo data)' : ' (demo mode)') : ' (clean, no demo data)'));
 }
 
-module.exports = { init, open, hashPassword, verifyPassword, DB_PATH, RESTORE_PENDING, TEST_ACCOUNT_EMAILS };
+module.exports = { init, open, hashPassword, verifyPassword, DB_PATH, RESTORE_PENDING, TEST_ACCOUNT_EMAILS, TEST_ACCOUNTS };

@@ -160,6 +160,7 @@ const App = {
 
     this.initAppDownloadLinks();
     this.initGoogleSignIn();
+    this.initTestAccounts();
   },
 
   // shows the "Get the Android app" link (login screen + sidebar) once a
@@ -171,6 +172,39 @@ const App = {
     if (!info || !info.available) return;
     document.querySelectorAll('#loginApkVer, #sideApkVer').forEach(el => { el.textContent = 'v' + info.version; });
     document.querySelectorAll('#loginApkLink, #sideApkLink').forEach(el => el.classList.remove('hidden'));
+  },
+
+  // one-tap login per role for pre-launch review — only ever populated
+  // while the server has PUREPAK_TEST_PASSWORD set (see db.js), so this
+  // panel simply never appears once that's removed for a real launch
+  async initTestAccounts() {
+    let accounts;
+    try { accounts = await API.testAccounts(); } catch { return; }
+    if (!accounts || !accounts.length) return;
+    const grid = document.getElementById('testAccountsGrid');
+    grid.innerHTML = accounts.map(a => `
+      <button type="button" class="demo-item" data-test-email="${API.esc(a.email)}">
+        <b>${API.esc(API.roleLabel(a.role))}</b>
+        <span>${API.esc(a.email)}</span>
+      </button>`).join('');
+    grid.querySelectorAll('[data-test-email]').forEach(btn =>
+      btn.addEventListener('click', () => this.doTestLogin(btn.dataset.testEmail, btn)));
+    document.getElementById('testAccountsPanel').classList.remove('hidden');
+  },
+
+  async doTestLogin(email, btn) {
+    const errEl = document.getElementById('loginErr');
+    if (errEl) errEl.textContent = '';
+    if (btn) btn.disabled = true;
+    try {
+      const r = await API.testLogin(email);
+      API.setAuth(r.token, r.user);
+      if (r.pending) this.showPending(r.user);
+      else this.enter(r.user);
+    } catch (err) {
+      if (errEl) errEl.textContent = err.message || 'Test login failed';
+      if (btn) btn.disabled = false;
+    }
   },
 
   hideSplash() {

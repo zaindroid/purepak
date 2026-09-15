@@ -19,6 +19,9 @@ webtest/shots
 webtest/phone-audit
 *.apk
 
+# local-only secrets reference (never commit)
+.env.local
+
 # OS
 .DS_Store
 Thumbs.db

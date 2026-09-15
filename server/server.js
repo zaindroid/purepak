@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
-const { init, verifyPassword, hashPassword, DB_PATH, RESTORE_PENDING } = require('./db');
+const { init, verifyPassword, hashPassword, DB_PATH, RESTORE_PENDING, TEST_ACCOUNTS } = require('./db');
 
 const PORT = Number(process.env.PORT || 4310);
 const { db } = init();
@@ -910,6 +910,26 @@ async function handleApi(req, res, url) {
     db.prepare(`UPDATE users SET last_login_at=? WHERE id=?`).run(new Date().toISOString().slice(0, 19).replace('T', ' '), u.id);
     const token = newSession(u);
     return json(res, 200, { token, user: userView(u), pending: false });
+  }
+  // ---- pre-launch review: one-tap login as each role, no password typed.
+  // Only ever live when PUREPAK_TEST_PASSWORD is set on the server (see
+  // db.js's seedTestAccounts) — the list endpoint returns [] otherwise, so
+  // the login screen shows nothing once that env var is removed for a real
+  // launch. The login endpoint itself never accepts a password — it's
+  // restricted to the fixed TEST_ACCOUNTS list either way, so there's no
+  // way to use it to get into a real account.
+  if (method === 'GET' && parts[1] === 'auth' && parts[2] === 'test-accounts') {
+    if (!process.env.PUREPAK_TEST_PASSWORD) return json(res, 200, []);
+    return json(res, 200, TEST_ACCOUNTS.map(([name, email, role]) => ({ name, email, role })));
+  }
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'test-login') {
+    if (!process.env.PUREPAK_TEST_PASSWORD) return err(res, 404, 'Not found');
+    const email = String((await readBody(req)).email || '').trim().toLowerCase();
+    if (!TEST_ACCOUNTS.some(a => a[1] === email)) return err(res, 404, 'Not found');
+    const u = db.prepare(`SELECT * FROM users WHERE email=? AND active=1`).get(email);
+    if (!u) return err(res, 404, 'Not found');
+    db.prepare(`UPDATE users SET last_login_at=? WHERE id=?`).run(new Date().toISOString().slice(0, 19).replace('T', ' '), u.id);
+    return json(res, 200, { token: newSession(u), user: userView(u), pending: false });
   }
   // ---- "Sign in with Google" — verifies the ID token Google's own Identity
   // Services JS library hands back client-side, then logs into a matching

@@ -73,6 +73,10 @@
   .field input:focus,.field textarea:focus{outline:none;border-color:var(--blue-600)}
   .field textarea{resize:vertical;min-height:64px}
   .hint{font-size:11.5px;color:var(--ink-3);margin-top:4px}
+  .pin-btn{display:inline-flex;align-items:center;gap:6px;background:none;border:none;color:var(--blue-700);font-weight:700;font-size:12.5px;padding:0;margin-top:-4px;margin-bottom:10px;cursor:pointer}
+  .pin-btn:disabled{opacity:.5;cursor:default}
+  .geo-map{width:100%;height:220px;border-radius:11px;border:1.5px solid var(--line);margin:2px 0 12px;overflow:hidden}
+  .pin-hint{font-size:11.5px;color:var(--ink-3);margin:-8px 0 12px}
   .err{background:var(--red-bg);color:var(--red-ink);border-radius:10px;padding:9px 12px;font-size:13px;font-weight:600;margin:10px 0 0;display:none}
   .backrow{display:flex;align-items:center;gap:8px;margin:16px 0 4px;color:var(--blue-700);font-weight:700;font-size:13.5px;cursor:pointer;user-select:none}
   [hidden]{display:none!important}
@@ -123,7 +127,10 @@
     <div class="card" style="padding:16px">
       <label class="field"><span>Your name</span><input id="fName" placeholder="e.g. Ahmed Khan" autocomplete="name"></label>
       <label class="field"><span>Phone number</span><input id="fPhone" type="tel" placeholder="03XX-XXXXXXX" autocomplete="tel" inputmode="tel"></label>
-      <label class="field"><span>Delivery address</span><textarea id="fAddress" placeholder="House / street, area, landmark"></textarea></label>
+      <label class="field"><span>Delivery address</span><input id="fAddress" placeholder="Start typing your address…" autocomplete="off"></label>
+      <button type="button" class="pin-btn" id="fPinBtn" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.3"/></svg><span id="fPinBtnLbl">Set exact location on map</span></button>
+      <div id="fMap" class="geo-map" hidden></div>
+      <p class="pin-hint" id="fPinHint" hidden>Drag the pin to your exact spot, or tap the map.</p>
       <label class="field"><span>Area (optional)</span><input id="fArea" placeholder="e.g. I-8, DHA, Johar Town"></label>
       <label class="field"><span>Note for the rider (optional)</span><input id="fNote" placeholder="e.g. call before arriving"></label>
       <div class="pay-note"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.8"/></svg>Pay cash when your order arrives — no payment needed now.</div>
@@ -161,6 +168,7 @@
   </div>
 </div>
 
+<script src="geo-picker.js"></script>
 <script>
 (function(){
   'use strict';
@@ -251,6 +259,19 @@
   });
   document.getElementById('backToStep1').addEventListener('click', function(){ showStep(1); });
 
+  // ---- location pin (optional — plain typed address always works without it) ----
+  var pickedLat = null, pickedLng = null;
+  if (window.GeoPicker) GeoPicker.attach({
+    addressInput: document.getElementById('fAddress'),
+    mapContainer: document.getElementById('fMap'),
+    pinBtn: document.getElementById('fPinBtn'),
+    onChange: function(lat, lng){
+      pickedLat = lat; pickedLng = lng;
+      document.getElementById('fPinHint').hidden = false;
+      document.getElementById('fPinBtnLbl').textContent = 'Location set — tap to adjust';
+    },
+  });
+
   function showErr(msg){
     var el = document.getElementById('formErr');
     el.textContent = msg; el.style.display = msg ? 'block' : 'none';
@@ -271,7 +292,7 @@
     var items = Object.keys(cart).map(function(pid){ return { product_id: Number(pid), qty: cart[pid] }; });
     fetch('/api/public/order', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name, phone: phone, address: address, area: area, notes: note, items: items, source: src }),
+      body: JSON.stringify({ name: name, phone: phone, address: address, area: area, notes: note, items: items, source: src, lat: pickedLat, lng: pickedLng }),
     }).then(function(r){ return r.json().then(function(j){ return { ok: r.ok, body: j }; }); })
       .then(function(res){
         btn.disabled = false; btn.innerHTML = 'Place order';

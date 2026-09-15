@@ -1173,6 +1173,14 @@ async function handleApi(req, res, url) {
     const phoneDigits = phoneRaw.replace(/\D/g, '');
     const address = String(b.address || '').trim().slice(0, 300);
     const area = String(b.area || '').trim().slice(0, 60) || null;
+    // an exact pin from the browser's address picker (Places selection or a
+    // dragged marker) beats anything the server could guess from text later
+    const pickedLat = b.lat, pickedLng = b.lng;
+    // typeof-guard first: Number(null) is 0 (a real, wrong coordinate), so a
+    // JSON body with "lat": null must NOT fall through to isFinite() below
+    const hasPickedLatLng = typeof pickedLat === 'number' && typeof pickedLng === 'number' &&
+      Number.isFinite(pickedLat) && Number.isFinite(pickedLng) &&
+      Math.abs(pickedLat) <= 90 && Math.abs(pickedLng) <= 180;
     if (name.length < 2) return err(res, 400, 'Please enter your name');
     if (phoneDigits.length < 10 || phoneDigits.length > 13) return err(res, 400, 'Please enter a valid phone number');
     if (address.length < 5) return err(res, 400, 'Please enter your delivery address');
@@ -1194,9 +1202,10 @@ async function handleApi(req, res, url) {
       } else if (cust.address.trim() !== address) {
         deliveryNote = 'Deliver to: ' + address; // don't clobber their saved address, just flag it for this order
       }
+      if (hasPickedLatLng) db.prepare('UPDATE customers SET lat=?, lng=? WHERE id=?').run(pickedLat, pickedLng, custId);
     } else {
-      const cr = db.prepare('INSERT INTO customers(name,phone,address,area,type) VALUES (?,?,?,?,?)')
-        .run(name, phoneRaw, address, area, 'retail');
+      const cr = db.prepare('INSERT INTO customers(name,phone,address,area,type,lat,lng) VALUES (?,?,?,?,?,?,?)')
+        .run(name, phoneRaw, address, area, 'retail', hasPickedLatLng ? pickedLat : null, hasPickedLatLng ? pickedLng : null);
       custId = Number(cr.lastInsertRowid); custType = 'retail';
     }
 
@@ -1485,8 +1494,12 @@ async function handleApi(req, res, url) {
     if (!b.name || !b.phone) return err(res, 400, 'name and phone required');
     const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
     const type = types.includes(b.type) ? b.type : 'retail';
-    const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type) VALUES (?,?,?,?,?,?,?)')
-      .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type);
+    const cLat = b.lat, cLng = b.lng;
+    const hasLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
+      Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
+    const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type,lat,lng) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type,
+        hasLatLng ? cLat : null, hasLatLng ? cLng : null);
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
     return json(res, 201, db.prepare('SELECT * FROM customers WHERE id=?').get(r.lastInsertRowid));
   }
@@ -1500,7 +1513,10 @@ async function handleApi(req, res, url) {
     if (!cur) return err(res, 404, 'Customer not found');
     const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
     const wantType = !ownRecord && b.type && types.includes(b.type) ? b.type : cur.type;
-    db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=? WHERE id=?`)
+    const cLat = b.lat, cLng = b.lng;
+    const hasLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
+      Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
+    db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=?, lat=?, lng=? WHERE id=?`)
       .run(ownRecord ? cur.name : (b.name != null ? String(b.name).trim() || cur.name : cur.name),
         b.contact_name !== undefined ? (b.contact_name || null) : cur.contact_name,
         b.phone != null ? String(b.phone).trim() || cur.phone : cur.phone,
@@ -1508,6 +1524,8 @@ async function handleApi(req, res, url) {
         b.address !== undefined ? (b.address || null) : cur.address,
         b.area !== undefined ? (b.area || null) : cur.area,
         wantType,
+        hasLatLng ? cLat : (b.address !== undefined && b.address !== cur.address ? null : cur.lat),
+        hasLatLng ? cLng : (b.address !== undefined && b.address !== cur.address ? null : cur.lng),
         cid);
     b.type = wantType; // downstream checks use b.type
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
@@ -2423,13 +2441,13 @@ async function handleApi(req, res, url) {
 // gotcha behind Cloudflare, which edge-caches static extensions by default.
 const ASSET_VER = (() => {
   let m = 0;
-  for (const f of ['index.html', 'styles.css', 'api.js', 'views.js', 'app.js']) {
+  for (const f of ['index.html', 'styles.css', 'api.js', 'views.js', 'app.js', 'geo-picker.js']) {
     try { m = Math.max(m, fs.statSync(path.join(WEB_ROOT, f)).mtimeMs); } catch {}
   }
   return String(Math.floor(m) || Date.now());
 })();
 function withAssetVer(html) {
-  return String(html).replace(/\b(src|href)="((?:api|views|app)\.js|styles\.css)"/g,
+  return String(html).replace(/\b(src|href)="((?:api|views|app|geo-picker)\.js|styles\.css)"/g,
     `$1="$2?v=${ASSET_VER}"`);
 }
 function staticHeaders(ext, p) {

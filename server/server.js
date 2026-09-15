@@ -477,12 +477,20 @@ async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 async function geocodeAddress(address, area) {
   const key = (address + '|' + (area || '')).toLowerCase().trim();
   if (GEO_CACHE.has(key)) return GEO_CACHE.get(key);
+  const q = address + (area ? ', ' + area : '') + ', Pakistan';
   const last = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=0&q=' +
-    encodeURIComponent(address + (area ? ', ' + area : '') + ', Pakistan'), {
+    encodeURIComponent(q), {
     headers: { 'User-Agent': 'PurePakDeliveryApp/1.0 (contact@purepak.com.pk)', 'Accept-Language': 'en' },
   });
+  if (!last.ok) {
+    // don't cache a transient failure (rate limit, 5xx) as a permanent
+    // "not found" — only a real empty result should stick
+    console.warn('geocode HTTP ' + last.status + ' for: ' + q);
+    return null;
+  }
   const rows = await last.json();
   const hit = rows && rows[0] ? [Number(rows[0].lat), Number(rows[0].lon)] : null;
+  if (!hit) console.warn('geocode: no match for: ' + q);
   GEO_CACHE.set(key, hit);
   return hit;
 }
@@ -503,7 +511,7 @@ async function fillMissingCoords(deliveryRows, maxGeocodes) {
         d.lat = hit[0]; d.lng = hit[1];
         done++;
       }
-    } catch { /* network hiccup — leave unlocated */ }
+    } catch (e) { console.warn('geocode network error for order#' + d.order_id + ': ' + e.message); }
   }
   return done;
 }

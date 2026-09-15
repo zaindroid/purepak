@@ -26,6 +26,7 @@ const IC = (() => {
     mail: s('<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7.5L12 13.5l8.5-6"/>', 19),
     megaphone: s('<path d="M3 10v4a1.5 1.5 0 0 0 1.5 1.5H6l3 5.5v-6"/><path d="M6 10 17.5 4v16L6 14"/><path d="M20.5 9.5a4 4 0 0 1 0 5"/>', 19),
     database: s('<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>', 19),
+    stack: s('<path d="M12 2.5l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/>', 19),
   };
 })();
 
@@ -2134,7 +2135,7 @@ function modalAddEmployee() {
   const isRoot = u.role === 'admin';
   const roles = [
     ['employee', 'Employee (office / general staff)'], ['shop_manager', 'Shop manager (orders & deliveries only)'],
-    ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'],
+    ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'], ['labour', 'Labour (production)'],
     ...(isRoot ? [['manager', 'Manager'], ['admin', 'Admin']] : []),
   ];
   openModal('Add employee', `
@@ -2192,7 +2193,7 @@ function modalEditEmployee(id) {
     if (!r) return;
     const roles = [
       ['employee', 'Employee'], ['shop_manager', 'Shop manager (orders & deliveries only)'],
-      ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'], ['customer', 'Customer'],
+      ['delivery', 'Delivery'], ['finance', 'Finance'], ['agent', 'Agent (commissioned)'], ['labour', 'Labour (production)'], ['customer', 'Customer'],
       ...(isRoot ? [['manager', 'Manager'], ['admin', 'Admin']] : []),
     ].filter(([k]) => !(k === 'admin' || k === 'manager') || isRoot);
     const protectedTarget = !isRoot && ['admin', 'manager'].includes(r.role);
@@ -2385,6 +2386,117 @@ function modalAddCustomer() {
 }
 
 // ---- products + price matrix ----
+// ---- production & stock (admin/manager approve; labour logs their own output) ----
+async function viewProductionAdmin() {
+  const [products, pending, recent] = await Promise.all([
+    API.products(),
+    API.production({ status: 'pending' }),
+    API.production({}),
+  ]);
+  const recentDone = recent.filter(e => e.status !== 'pending').slice(0, 15);
+  const stockRow = (p) => `<tr>
+    <td class="cell-main" data-l="Product"><div class="prod-row-lbl">${bottleThumb(p, IC.bottle)}<span>${API.esc(p.name)}</span></div></td>
+    ${V.m('Size', sizeLabel(p.size_ml), 'tv num')}
+    ${V.m('In stock', `<b${p.stock <= 0 ? ' style="color:var(--red-ink)"' : ''}>${p.stock}</b>`, 'tv num')}
+    <td class="cell-act"><button class="btn ghost sm" data-act="adjust-stock" data-id="${p.id}">Adjust</button></td>
+  </tr>`;
+  const entryRow = (e, withActions) => `<div class="team-row">
+    <div class="team-av">${IC.stack}</div>
+    <div class="team-main">
+      <div class="nm">${e.qty} × ${API.esc(e.product_name)} <span class="chip ${e.status}">${API.statusLabel(e.status)}</span></div>
+      <div class="sub">${API.esc(e.labour_name)} · ${API.fmtDay(e.entry_date)}${e.notes ? ' · ' + API.esc(e.notes) : ''}</div>
+      ${e.status !== 'pending' ? `<div class="muted" style="font-size:11px;margin-top:2px">by ${API.esc(e.approved_by_name || '—')}</div>` : ''}
+    </div>
+    ${withActions ? `<div class="team-acts" style="flex:none">
+      <button class="btn ghost sm" data-act="review-production" data-id="${e.id}" data-status="rejected">Reject</button>
+      <button class="btn primary sm" data-act="review-production" data-id="${e.id}" data-status="approved">Approve</button>
+    </div>` : ''}
+  </div>`;
+  return `
+  <div class="page-head"><h1>Production &amp; stock</h1></div>
+  <div class="card" style="margin-bottom:16px"><div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Product</th><th class="num">Size</th><th class="num">In stock</th><th></th></tr></thead>
+    <tbody>${products.map(stockRow).join('')}</tbody>
+  </table></div></div>
+  <div class="sec-t">Needs approval${pending.length ? ' — ' + pending.length : ''}</div>
+  ${pending.map(e => entryRow(e, true)).join('') || '<div class="card card-pad empty">Nothing waiting on approval.</div>'}
+  <div class="sec-t">Recent activity</div>
+  ${recentDone.map(e => entryRow(e, false)).join('') || '<div class="card card-pad empty">No approved or rejected entries yet.</div>'}`;
+}
+async function viewProductionLog() {
+  const mine = await API.production({});
+  const entryRow = (e) => `<div class="team-row">
+    <div class="team-av">${IC.stack}</div>
+    <div class="team-main">
+      <div class="nm">${e.qty} × ${API.esc(e.product_name)} <span class="chip ${e.status}">${API.statusLabel(e.status)}</span></div>
+      <div class="sub">${API.fmtDay(e.entry_date)}${e.notes ? ' · ' + API.esc(e.notes) : ''}</div>
+    </div>
+  </div>`;
+  return `
+  <div class="page-head"><h1>Log production</h1>
+    <button class="btn primary sm" data-act="log-production">+ Log today's output</button></div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Submitted entries wait for manager approval before they count toward stock.</p>
+  ${mine.map(entryRow).join('') || '<div class="card card-pad empty">Nothing logged yet — tap "+ Log today\'s output" to add your first entry.</div>'}`;
+}
+function modalLogProduction() {
+  API.products().then(products => {
+    openModal('Log production', `
+      <div class="modal-bd">
+        <label class="muted">Product</label>
+        <select id="lpProduct" class="input" style="width:100%;margin-bottom:10px">
+          ${products.filter(p => p.active).map(p => `<option value="${p.id}">${API.esc(p.name)} (${sizeLabel(p.size_ml)})</option>`).join('')}
+        </select>
+        <div class="row2" style="margin-bottom:10px">
+          <div class="field" style="margin:0"><span>Units produced</span><input id="lpQty" class="input" type="number" min="1" placeholder="e.g. 50"></div>
+          <div class="field" style="margin:0"><span>Date</span><input id="lpDate" class="input" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+        </div>
+        <label class="muted">Note (optional)</label>
+        <input id="lpNotes" class="input" style="width:100%" placeholder="e.g. morning batch">
+      </div>`,
+      `<button class="btn ghost" data-close-modal>Cancel</button>
+       <button class="btn primary" id="lpSubmit">Submit</button>`);
+    document.getElementById('lpSubmit').addEventListener('click', async () => {
+      const b = {
+        product_id: +document.getElementById('lpProduct').value,
+        qty: +document.getElementById('lpQty').value,
+        entry_date: document.getElementById('lpDate').value,
+        notes: document.getElementById('lpNotes').value.trim() || undefined,
+      };
+      if (!(b.qty > 0)) { toast('Enter how many units were produced', 'warn'); return; }
+      try {
+        await API.logProduction(b);
+        closeModal();
+        toast('Logged — waiting on manager approval', 'ok');
+        App.refresh();
+      } catch (e) { toast(e.message, 'err'); }
+    });
+  });
+}
+function modalAdjustStock(productId) {
+  API.products().then(products => {
+    const p = products.find(x => x.id === productId);
+    if (!p) return;
+    openModal('Adjust stock — ' + p.name, `
+      <div class="modal-bd">
+        <p class="muted" style="font-size:12.5px;margin:0 0 10px">Currently <b>${p.stock}</b> in stock. Use this for a manual correction (stock-take, damage) — normal production and deliveries already update this automatically.</p>
+        <label class="muted">New stock count</label>
+        <input id="asStock" class="input" style="width:100%" type="number" value="${p.stock}">
+      </div>`,
+      `<button class="btn ghost" data-close-modal>Cancel</button>
+       <button class="btn primary" id="asSave">Save</button>`);
+    document.getElementById('asSave').addEventListener('click', async () => {
+      const stock = +document.getElementById('asStock').value;
+      if (!Number.isFinite(stock)) { toast('Enter a valid number', 'warn'); return; }
+      try {
+        await API.updateProduct(productId, { stock });
+        closeModal();
+        toast('Stock updated', 'ok');
+        App.refresh();
+      } catch (e) { toast(e.message, 'err'); }
+    });
+  });
+}
+
 async function viewProducts() {
   const u = API.user;
   const canEdit = ['admin', 'manager'].includes(u.role);
@@ -2577,6 +2689,7 @@ const ADMIN_NAV = [
   { to: 'orders', icon: IC.box, label: 'Orders', section: 'Operations' },
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
   { to: 'route', icon: IC.route, label: 'Route map' },
+  { to: 'production', icon: IC.stack, label: 'Production & stock' },
   { to: 'customers', icon: IC.users, label: 'Customers', section: 'Sales' },
   { to: 'agents', icon: IC.badge, label: 'Agents & commissions' },
   { to: 'offers', icon: IC.megaphone, label: 'Offers' },
@@ -2603,6 +2716,7 @@ const MANAGER_NAV = [
   { to: 'orders', icon: IC.box, label: 'Orders', section: 'Operations' },
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
   { to: 'route', icon: IC.route, label: 'Route map' },
+  { to: 'production', icon: IC.stack, label: 'Production & stock' },
   { to: 'offers', icon: IC.megaphone, label: 'Offers', section: 'Sales' },
   { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping', section: 'Finance' },
   { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
@@ -2640,6 +2754,9 @@ function navFor(role) {
     employee: [
       { to: 'profile', icon: IC.users, label: 'My profile' },
     ],
+    labour: [
+      { to: 'production', icon: IC.stack, label: 'Log production' },
+    ],
     customer: [
       { to: 'home', icon: IC.drop, label: 'Shop' },
       { to: 'orders', icon: IC.box, label: 'My orders' },
@@ -2653,7 +2770,7 @@ function navFor(role) {
 const VIEW = {
   admin: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
-    route: viewSmartRoute,
+    route: viewSmartRoute, production: viewProductionAdmin,
     customers: viewCustomers,
     agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
@@ -2661,7 +2778,7 @@ const VIEW = {
   },
   manager: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
-    route: viewSmartRoute,
+    route: viewSmartRoute, production: viewProductionAdmin,
     offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts, backups: viewBackups,
@@ -2671,5 +2788,6 @@ const VIEW = {
   delivery: { route: viewSmartRoute, deliveries: viewDeliveries, receipts: viewReceipts },
   shop_manager: { orders: viewOrders, deliveries: viewDeliveries },
   employee: { profile: viewProfile, orders: viewOrders },
+  labour: { production: viewProductionLog },
   customer: { home: viewCustomerHome, orders: viewOrders, profile: viewCustomerProfile },
 };

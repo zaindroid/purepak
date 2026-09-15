@@ -275,6 +275,11 @@ function staffUserIds() {
 function orderStaffUserIds() {
   return db.prepare(`SELECT id FROM users WHERE role IN ('admin','manager','shop_manager','finance') AND status='active'`).all().map(r => r.id);
 }
+// production entries are approved by admin/manager only — finance/shop_manager
+// don't touch stock, so they're deliberately left out of this one
+function productionApproverIds() {
+  return db.prepare(`SELECT id FROM users WHERE role IN ('admin','manager') AND status='active'`).all().map(r => r.id);
+}
 
 // ---------- payment methods (Pakistan) ----------
 const PAY_METHODS = [
@@ -1352,7 +1357,7 @@ async function handleApi(req, res, url) {
     const email = String(b.email || '').trim().toLowerCase();
     const phone = String(b.phone || '').trim() || null;
     const password = String(b.password || '');
-    let role = ['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer'].includes(b.role) ? b.role : null;
+    let role = ['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer', 'labour'].includes(b.role) ? b.role : null;
     if (name.length < 2) return err(res, 400, 'Please enter a name');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(res, 400, 'Please enter a valid email');
     if (password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
@@ -1391,7 +1396,7 @@ async function handleApi(req, res, url) {
     const changes = [];
     let role = cur.role, salary = cur.salary, status = cur.status, phone = cur.phone, name = cur.name;
     if (b.role !== undefined && b.role !== cur.role) {
-      if (!['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer'].includes(b.role))
+      if (!['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer', 'labour'].includes(b.role))
         return err(res, 400, 'Invalid role');
       if (user.role !== 'admin' && ['admin', 'manager'].includes(b.role))
         return err(res, 403, 'Only an admin can assign admin/manager roles');
@@ -1439,7 +1444,7 @@ async function handleApi(req, res, url) {
 
   // ---- catalog (any authenticated; admins/managers also see inactive for re-enabling) ----
   if (method === 'GET' && parts[1] === 'products') {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer']);
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer', 'labour']);
     const all = user && ['admin', 'manager'].includes(user.role);
     const rows = all
       ? db.prepare('SELECT * FROM products').all()
@@ -1477,18 +1482,83 @@ async function handleApi(req, res, url) {
     const cur = db.prepare('SELECT * FROM products WHERE id=?').get(+parts[2]);
     if (!cur) return err(res, 404, 'Product not found');
     if (b.image) saveProductImage(+parts[2], b.image, b.mimetype);
-    db.prepare(`UPDATE products SET name=?, size_ml=?, price=?, description=?, active=? WHERE id=?`).run(
+    db.prepare(`UPDATE products SET name=?, size_ml=?, price=?, description=?, active=?, stock=? WHERE id=?`).run(
       b.name != null ? String(b.name).trim() || cur.name : cur.name,
       b.size_ml != null && Number(b.size_ml) > 0 ? Number(b.size_ml) : cur.size_ml,
       b.price !== undefined && Number(b.price) >= 0 ? Number(b.price) : cur.price,
       b.description !== undefined ? (b.description || null) : cur.description,
       b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
+      // manual correction (stock-take, damage write-off) — production
+      // approval and order dispatch are the normal, automatic paths
+      b.stock !== undefined && Number.isFinite(Number(b.stock)) ? Math.round(Number(b.stock)) : cur.stock,
       +parts[2]);
     if (b.price !== undefined && Number(b.price) >= 0 && Number(b.price) !== cur.price)
       notify(staffUserIds().filter(x => x !== user.id), 'pricing', 'Base price changed',
         cur.name + ' base price ' + cur.price + ' → ' + Number(b.price) + ' (by ' + user.name + ').', 'product#' + cur.id);
     sseBroadcast('pricing'); // price / availability change reaches every open shop live
     return json(res, 200, db.prepare('SELECT * FROM products WHERE id=?').get(+parts[2]));
+  }
+
+  // ---- production (labour logs output, admin/manager approve into stock) ----
+  const Q_PRODUCTION = `SELECT pe.*, p.name AS product_name, p.size_ml AS product_size_ml,
+                                u.name AS labour_name, au.name AS approved_by_name
+                         FROM production_entries pe
+                         JOIN products p ON p.id=pe.product_id
+                         JOIN users u ON u.id=pe.labour_user_id
+                         LEFT JOIN users au ON au.id=pe.approved_by`;
+  if (method === 'GET' && parts[1] === 'production') {
+    requireRole(user, ['admin', 'manager', 'labour']);
+    let sql = Q_PRODUCTION + ' WHERE 1=1';
+    const args = [];
+    if (user.role === 'labour') { sql += ' AND pe.labour_user_id=?'; args.push(user.id); }
+    const status = url.searchParams.get('status');
+    if (status) { sql += ' AND pe.status=?'; args.push(status); }
+    const date = url.searchParams.get('date');
+    if (date) { sql += ' AND pe.entry_date=?'; args.push(date); }
+    sql += ' ORDER BY pe.entry_date DESC, pe.id DESC';
+    return json(res, 200, db.prepare(sql).all(...args));
+  }
+  if (method === 'POST' && parts[1] === 'production') {
+    requireRole(user, ['admin', 'manager', 'labour']);
+    const b = await readBody(req);
+    const p = db.prepare('SELECT * FROM products WHERE id=?').get(b.product_id);
+    if (!p) return err(res, 400, 'Unknown product');
+    const qty = Math.round(Number(b.qty));
+    if (!Number.isFinite(qty) || qty <= 0) return err(res, 400, 'Enter how many units were produced');
+    // labour can only log their own output; admin/manager can back-fill for
+    // any labour worker (a missed day, a correction) via labour_user_id
+    let labourUserId = user.id;
+    if (user.role !== 'labour') {
+      const target = Number(b.labour_user_id) || user.id;
+      const tu = db.prepare(`SELECT id FROM users WHERE id=? AND role='labour'`).get(target);
+      labourUserId = tu ? tu.id : user.id;
+    }
+    const entryDate = /^\d{4}-\d{2}-\d{2}$/.test(b.entry_date || '') ? b.entry_date : new Date().toISOString().slice(0, 10);
+    const notes = String(b.notes || '').trim().slice(0, 300) || null;
+    const r = db.prepare(`INSERT INTO production_entries(labour_user_id,product_id,qty,entry_date,notes) VALUES (?,?,?,?,?)`)
+      .run(labourUserId, p.id, qty, entryDate, notes);
+    const eid = Number(r.lastInsertRowid);
+    notify(productionApproverIds().filter(x => x !== user.id), 'production', 'Production logged — needs approval',
+      `${qty} × ${p.name} (${entryDate})`, 'production#' + eid);
+    return json(res, 201, db.prepare(Q_PRODUCTION + ' WHERE pe.id=?').get(eid));
+  }
+  if (method === 'PATCH' && parts[1] === 'production' && parts.length === 3 && !isNaN(+parts[2])) {
+    requireRole(user, ['admin', 'manager']);
+    const eid = +parts[2];
+    const cur = db.prepare('SELECT * FROM production_entries WHERE id=?').get(eid);
+    if (!cur) return err(res, 404, 'Production entry not found');
+    if (cur.status !== 'pending') return err(res, 400, 'This entry was already ' + cur.status);
+    const b = await readBody(req);
+    if (!['approved', 'rejected'].includes(b.status)) return err(res, 400, 'status must be approved or rejected');
+    db.prepare(`UPDATE production_entries SET status=?, approved_by=?, approved_at=datetime('now') WHERE id=?`)
+      .run(b.status, user.id, eid);
+    if (b.status === 'approved') db.prepare('UPDATE products SET stock = stock + ? WHERE id=?').run(cur.qty, cur.product_id);
+    const p = db.prepare('SELECT name FROM products WHERE id=?').get(cur.product_id);
+    notify([cur.labour_user_id], 'production',
+      b.status === 'approved' ? 'Production approved' : 'Production entry rejected',
+      `${cur.qty} × ${p ? p.name : 'product'} (${cur.entry_date})${b.status === 'rejected' && b.reason ? ' — ' + b.reason : ''}`,
+      'production#' + eid);
+    return json(res, 200, db.prepare(Q_PRODUCTION + ' WHERE pe.id=?').get(eid));
   }
 
   // ---- customers ----
@@ -1692,6 +1762,14 @@ async function handleApi(req, res, url) {
           db.prepare(`INSERT INTO deliveries(order_id,driver,vehicle,status,scheduled_at) VALUES (?,?,?,?,?)`)
             .run(oid, b.driver || 'Unassigned', b.vehicle || null, 'out_for_delivery', b.scheduled_at || new Date().toISOString().slice(0, 19).replace('T', ' '));
         }
+        // physical stock leaves the building the moment an order is
+        // dispatched, not whenever someone later marks it delivered (which
+        // can lag by hours) — the order's own state machine guarantees this
+        // fires exactly once per order (confirmed -> in_delivery is a
+        // one-way step; nothing routes back into in_delivery a second time)
+        const decItems = db.prepare('SELECT product_id, qty FROM order_items WHERE order_id=?').all(oid);
+        const dec = db.prepare('UPDATE products SET stock = stock - ? WHERE id=?');
+        for (const it of decItems) dec.run(it.qty, it.product_id);
       }
       if (b.status === 'delivered') {
         db.prepare(`UPDATE deliveries SET status='delivered', delivered_at=datetime('now') WHERE order_id=? AND status IN ('pending','out_for_delivery')`).run(oid);

@@ -477,7 +477,7 @@ const App = {
         window.refreshOfferBanner().catch(() => {});
       }
     };
-    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer', 'commission', 'offer'].forEach(ev =>
+    ['order', 'pricing', 'team', 'receipt', 'payroll', 'customer', 'commission', 'offer', 'production'].forEach(ev =>
       es.addEventListener(ev, () => onEvent(ev)));
     es.addEventListener('message', () => onEvent('message'));
     es.addEventListener('error', () => { /* EventSource auto-reconnects; no-op */ });
@@ -557,6 +557,8 @@ const App = {
       goto('products', 'bookkeeping', 'home');
     } else if (/^offer#/.test(ref)) {
       goto('home', 'dashboard'); // the offer banner lives on the customer's Shop page
+    } else if (/^production#/.test(ref)) {
+      goto('production', 'dashboard');
     }
   },
 
@@ -741,6 +743,16 @@ const App = {
         } catch (err) { toast(err.message, 'err'); }
         break;
       }
+      case 'log-production': stop(); modalLogProduction(); break;
+      case 'review-production': stop(); {
+        try {
+          await API.reviewProduction(+id, { status });
+          this.toast(status === 'approved' ? 'Production approved — stock updated' : 'Entry rejected');
+          this.refresh();
+        } catch (e) { this.toast(e.message, 'err'); }
+        break;
+      }
+      case 'adjust-stock': stop(); modalAdjustStock(+id); break;
       case 'add-customer': stop(); modalAddCustomer(); break;
       case 'edit-customer': stop(); modalEditCustomer(+id); break;
       case 'add-employee': stop(); modalAddEmployee(); break;

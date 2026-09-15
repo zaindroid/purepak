@@ -84,7 +84,7 @@ function migrate(db) {
     email TEXT NOT NULL UNIQUE,
     phone TEXT,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer')),
+    role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer','labour')),
     agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
     customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
     salary REAL,
@@ -102,6 +102,24 @@ function migrate(db) {
     description TEXT,
     active INTEGER NOT NULL DEFAULT 1
   );
+
+  -- one row per labour worker's claimed daily output for one product; stock
+  -- only moves on approval, so a mistaken or duplicate submission never
+  -- touches real inventory until a manager/admin has actually looked at it
+  CREATE TABLE IF NOT EXISTS production_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    labour_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    qty INTEGER NOT NULL,
+    entry_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    notes TEXT,
+    approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    approved_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_production_status_date ON production_entries(status, entry_date);
+  CREATE INDEX IF NOT EXISTS idx_production_labour ON production_entries(labour_user_id, entry_date);
 
   CREATE TABLE IF NOT EXISTS customer_types (
     name TEXT PRIMARY KEY
@@ -297,6 +315,7 @@ function migrate(db) {
 
   const pcols = db.prepare(`PRAGMA table_info(products)`).all().map(c => c.name);
   if (!pcols.includes('image_url')) db.exec('ALTER TABLE products ADD COLUMN image_url TEXT');
+  if (!pcols.includes('stock')) db.exec('ALTER TABLE products ADD COLUMN stock INTEGER NOT NULL DEFAULT 0');
 
   // offer targeting — every column nullable/optional; null means "no
   // restriction on this dimension" so an old offer with none set still
@@ -341,6 +360,34 @@ function migrate(db) {
         phone TEXT,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer')),
+        agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        salary REAL,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled')),
+        active INTEGER NOT NULL DEFAULT 1,
+        last_login_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO users_new (id,name,email,phone,password_hash,role,agent_id,customer_id,salary,status,active,last_login_at,created_at)
+        SELECT id,name,email,phone,password_hash,role,agent_id,customer_id,salary,status,active,last_login_at,created_at FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+    `);
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+
+  // allow the new 'labour' role — same rebuild-in-place technique as above
+  const usersDef2 = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).get();
+  if (usersDef2 && usersDef2.sql && !usersDef2.sql.includes('labour')) {
+    db.exec('PRAGMA foreign_keys = OFF;');
+    db.exec(`
+      CREATE TABLE users_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        phone TEXT,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer','labour')),
         agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
         customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
         salary REAL,
@@ -580,6 +627,7 @@ const TEST_ACCOUNTS = [
   ['Test Finance', 'test-finance@purepak.test', 'finance', 40000],
   ['Test Delivery', 'test-delivery@purepak.test', 'delivery', 25000],
   ['Test Employee', 'test-employee@purepak.test', 'employee', 20000],
+  ['Test Labour', 'test-labour@purepak.test', 'labour', 18000],
   ['Test Agent', 'test-agent@purepak.test', 'agent', null],
   ['Test Customer', 'test-customer@purepak.test', 'customer', null],
 ];

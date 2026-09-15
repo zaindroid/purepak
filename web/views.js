@@ -2084,7 +2084,7 @@ async function viewTeam() {
   const statusChip = (r) => r.status === 'pending'
     ? '<span class="chip pending">Pending</span>'
     : (r.status === 'disabled' ? '<span class="chip cancelled">Disabled</span>' : '<span class="chip approved">Active</span>');
-  const canViewAgents = ['admin', 'manager', 'finance'].includes(u.role);
+  const canViewAgents = ['admin', 'finance'].includes(u.role);
   return `<div class="page-head"><h1>Team</h1>
     <button class="btn primary sm" data-act="add-employee">+ Add employee</button></div>
     <div class="grid kpis" style="margin-top:14px">
@@ -2596,10 +2596,27 @@ const SHOP_MANAGER_NAV = [
   { to: 'orders', icon: IC.box, label: 'Orders' },
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
 ];
+// Manager: everything admin has except customer records, agent management,
+// and commissions — those stay admin-only.
+const MANAGER_NAV = [
+  { to: 'dashboard', icon: IC.chart, label: 'Dashboard' },
+  { to: 'orders', icon: IC.box, label: 'Orders', section: 'Operations' },
+  { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
+  { to: 'route', icon: IC.route, label: 'Route map' },
+  { to: 'offers', icon: IC.megaphone, label: 'Offers', section: 'Sales' },
+  { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping', section: 'Finance' },
+  { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
+  { to: 'payments', icon: IC.wallet, label: 'Payment methods' },
+  { to: 'payroll', icon: IC.wallet, label: 'Payroll' },
+  { to: 'audit', icon: IC.clip, label: 'Audit trail' },
+  { to: 'products', icon: IC.bottle, label: 'Products', section: 'Catalog & team' },
+  { to: 'team', icon: IC.shield, label: 'Team' },
+  { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
+];
 function navFor(role) {
   const N = {
     admin: ADMIN_NAV,
-    manager: ADMIN_NAV,
+    manager: MANAGER_NAV,
     shop_manager: SHOP_MANAGER_NAV,
     finance: [
       { to: 'dashboard', icon: IC.chart, label: 'Finance' },
@@ -2645,8 +2662,7 @@ const VIEW = {
   manager: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute,
-    customers: viewCustomers,
-    agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
+    offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts, backups: viewBackups,
   },

@@ -529,7 +529,17 @@ function optimizeRoute(rows, start) {
   }
   let cum = 0;
   seq.forEach(s => { cum += s.leg_km; s.cum_km = Math.round(cum * 100) / 100; });
-  return { sequence: seq, total_km: Math.round(cum * 100) / 100, unlocated: unlocated.map(d => ({ id: d.id, customer: d.customer })) };
+  // Stops with no address, or one Nominatim can't resolve, used to be dropped
+  // from the plan entirely — invisible to the driver with no way to act on
+  // them. Append them after the routed stops instead: no map position, but
+  // still full delivery/order details so Start trip / Mark delivered work.
+  const noPos = unlocated.map(stop => ({
+    delivery_id: stop.id, customer: stop.customer, address: stop.customer_address, area: stop.customer_area,
+    phone: stop.customer_phone, status: stop.status, items: stop.items,
+    order_id: stop.order_id, order_total: stop.order_total, order_paid: stop.order_paid,
+    lat: null, lng: null, leg_km: null, cum_km: null,
+  }));
+  return { sequence: [...seq, ...noPos], total_km: Math.round(cum * 100) / 100, unlocated: unlocated.map(d => ({ id: d.id, customer: d.customer })) };
 }
 // ---------- receipt OCR via Google Gemini (AI Studio) ----------
 // PurePak receipts have a FIXED layout (sales receipt book page), so the prompt

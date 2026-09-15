@@ -607,8 +607,14 @@ async function viewSmartRoute() {
   smartRoute.plan = plan || EMPTY_PLAN;
   plan = smartRoute.plan;
   const top3 = plan.sequence.slice(0, 3);
+  const pendingCount = plan.sequence.filter(s => s.status === 'pending').length;
   return `
-  <div class="page-head"><h1>Smart route</h1><button class="btn sm" data-act="reroute">${IC.locate} Optimize</button></div>
+  <div class="page-head"><h1>Smart route</h1>
+    <div style="display:flex;gap:8px">
+      ${pendingCount ? `<button class="btn primary sm" data-act="del-start-all">${IC.locate} Start trip (${pendingCount})</button>` : ''}
+      <button class="btn sm" data-act="reroute">${IC.locate} Optimize</button>
+    </div>
+  </div>
   <div class="card" style="padding:0;overflow:hidden">
     <div id="routeMap" class="route-map"></div>
     <div class="map-foot">
@@ -650,9 +656,10 @@ function smartStopCard(s, idx, compact) {
       </div>
       <div class="muted" style="font-size:12.5px;margin-top:2px">${API.esc(s.address || '')} ${s.area ? '· ' + API.esc(s.area) : ''}</div>
       <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-top:6px">
-        <span class="muted">leg ${s.leg_km} km · cum ${s.cum_km} km</span>
+        <span class="muted">${s.leg_km != null ? `leg ${s.leg_km} km · cum ${s.cum_km} km` : '<span style="color:var(--amber-ink)">no map position</span>'}</span>
         <span>${due > 0 ? '<b style="color:var(--amber-ink)">' + API.fmtMoney(due) + '</b>' : '<span style="color:var(--green-ink)">paid</span>'}</span>
       </div>
+      <div style="margin-top:8px">${act}</div>
     </div>`;
   }
   return `<div class="card card-pad stop-card">${head}
@@ -667,8 +674,9 @@ function smartStopCard(s, idx, compact) {
       <span>${due > 0 ? '<b style="color:var(--amber-ink)">collect ' + API.fmtMoney(due) + '</b>' : '<span style="color:var(--green-ink)">paid</span>'}</span>
     </div>
     <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-3);margin-top:8px">
-      <span>From previous: <b style="color:var(--ink-1)">${s.leg_km} km</b></span>
-      <span>Total so far: <b style="color:var(--ink-1)">${s.cum_km} km</b></span>
+      ${s.leg_km != null ? `<span>From previous: <b style="color:var(--ink-1)">${s.leg_km} km</b></span>
+      <span>Total so far: <b style="color:var(--ink-1)">${s.cum_km} km</b></span>`
+      : '<span style="color:var(--amber-ink)">No map position — use the address/phone above to navigate</span>'}
     </div>
     <div style="margin-top:10px">${act}</div>
   </div>`;
@@ -683,7 +691,11 @@ async function initSmartRoute() {
   // in flight (or failed), don't crash on a null sequence.
   if (!plan || !Array.isArray(plan.sequence) || !plan.start) return;
   const start = plan.start;
-  const pts = [start, ...plan.sequence.map(s => [s.lat, s.lng])];
+  // stops with no map position (no address, or one that couldn't be
+  // geocoded) still appear in plan.sequence for the driver's queue below,
+  // but obviously can't be plotted or routed through here
+  const located = plan.sequence.filter(s => s.lat != null && s.lng != null);
+  const pts = [start, ...located.map(s => [s.lat, s.lng])];
   const map = L.map(el, { zoomControl: true, attributionControl: true });
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
@@ -691,14 +703,17 @@ async function initSmartRoute() {
   }).addTo(map);
   viewFx.map = map;
   // route polyline
-  if (plan.sequence.length) {
+  if (located.length) {
     L.polyline(pts, { color: '#1976d2', weight: 4, opacity: 0.75, dashArray: '8 10' }).addTo(map);
   }
   // depot / start marker
   L.circleMarker([start.lat, start.lng], { radius: 9, color: '#0a4d8c', fillColor: '#1976d2', fillOpacity: 0.9, weight: 3 })
     .addTo(map).bindTooltip('Start');
-  // numbered stop markers
+  // numbered stop markers — index matches the stop-card queue below, so a
+  // number on the map lines up with the same number in the list even when
+  // some stops in between have no map position and are skipped here
   plan.sequence.forEach((s, i) => {
+    if (s.lat == null || s.lng == null) return;
     const icon = L.divIcon({ className: 'stop-marker-wrap', html: `<div class="stop-badge ${s.status === 'out_for_delivery' ? 'active' : ''}">${i + 1}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
     L.marker([s.lat, s.lng], { icon })
       .addTo(map)
@@ -723,7 +738,7 @@ function startProximityWatcher() {
         viewFx._riderMarker && viewFx._riderMarker.setLatLng([smartRoute.myPos.lat, smartRoute.myPos.lng]);
       }
       const next = smartRoute.plan && smartRoute.plan.sequence[0];
-      if (next && !smartRoute.notified.has(next.delivery_id)) {
+      if (next && next.lat != null && !smartRoute.notified.has(next.delivery_id)) {
         const d = haversineKmJS(smartRoute.myPos, { lat: next.lat, lng: next.lng });
         if (d <= 0.45) {
           smartRoute.notified.add(next.delivery_id);

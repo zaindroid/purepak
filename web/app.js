@@ -673,6 +673,18 @@ const App = {
         try { await API.updateDelivery(+id, { status: 'out_for_delivery' }); this.toast('Trip started'); this.refresh(); }
         catch (e) { this.toast(e.message, 'bad'); }
         break;
+      case 'del-start-all': stop(); {
+        const pending = (smartRoute.plan?.sequence || []).filter(s => s.status === 'pending');
+        if (!pending.length) break;
+        if (!await confirmDialog({ title: 'Start trip', message: `Mark all ${pending.length} pending stop(s) as out for delivery?`, okLabel: 'Start trip' })) break;
+        let failed = 0;
+        for (const s of pending) {
+          try { await API.updateDelivery(s.delivery_id, { status: 'out_for_delivery' }); }
+          catch { failed++; }
+        }
+        this.toast(failed ? `Started, but ${failed} stop(s) failed` : 'Trip started — whole route is out for delivery', failed ? 'bad' : 'ok');
+        this.refresh();
+      } break;
       case 'del-done': stop();
         modalMarkDelivered(+id, +due || 0, method);
         break;

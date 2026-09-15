@@ -419,6 +419,7 @@ function userView(u) {
 const Q = {
   orders: `SELECT o.*, c.name AS customer_name, c.phone AS customer_phone, c.area AS customer_area,
                   c.address AS customer_address, a.name AS agent_name,
+                  ((o.id * 48271) % 900000) + 100000 AS display_no,
                   (SELECT GROUP_CONCAT(p.name || ' x' || oi.qty, '; ') FROM order_items oi JOIN products p ON p.id=oi.product_id WHERE oi.order_id=o.id) AS items,
                   (SELECT COALESCE(SUM(oi.qty),0) FROM order_items oi WHERE oi.order_id=o.id) AS units,
                   (SELECT d.status FROM deliveries d WHERE d.order_id=o.id ORDER BY d.id DESC LIMIT 1) AS delivery_status,
@@ -432,6 +433,18 @@ const Q = {
 // unexplained number to any one of them ("order #22" when they've only
 // ever placed 3). Staff/agent/driver notifications keep the id — they
 // genuinely use it to look the order up.
+// Deterministic customer-facing order number, standing in for the raw
+// sequential id — showing a customer (or a competitor placing a test order)
+// "order #29" tells them exactly how many orders the business has ever
+// processed. A multiplicative hash scatters ids across a fixed 6-digit
+// range with no visible relationship between consecutive real orders,
+// while staying a pure function of the id (no extra column, no collision
+// bookkeeping — 48271 and 900000 share no factors, so it's one-to-one for
+// every id this business will ever reach). Staff/agent/driver views keep
+// showing the real id, which they genuinely need to look orders up by.
+function customerOrderNo(id) {
+  return ((id * 48271) % 900000) + 100000;
+}
 function orderItemsSummary(orderId) {
   const rows = db.prepare(`SELECT p.name, oi.qty FROM order_items oi JOIN products p ON p.id=oi.product_id WHERE oi.order_id=? ORDER BY oi.id`).all(orderId);
   if (!rows.length) return 'your order';
@@ -1239,7 +1252,7 @@ async function handleApi(req, res, url) {
       'order#' + orderId);
     sseSendMany(officeUserIds(), 'order');
 
-    return json(res, 201, { id: orderId, total });
+    return json(res, 201, { id: orderId, display_no: customerOrderNo(orderId), total });
   }
 
   // ---- public: active offers, for the guest QR page banner (no auth) ----

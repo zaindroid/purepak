@@ -301,9 +301,9 @@
       .then(function(res){
         btn.disabled = false; btn.innerHTML = 'Place order';
         if (!res.ok) return showErr(res.body && res.body.error || 'Something went wrong — please try again.');
-        document.getElementById('doneOrderId').textContent = '#' + res.body.id;
+        document.getElementById('doneOrderId').textContent = '#' + res.body.display_no;
         document.getElementById('doneOrderTotal').textContent = money(res.body.total);
-        document.getElementById('waBtn').href = 'https://wa.me/' + WA_NUMBER + '?text=' + encodeURIComponent('Hi PurePak, I just placed order #' + res.body.id + '.');
+        document.getElementById('waBtn').href = 'https://wa.me/' + WA_NUMBER + '?text=' + encodeURIComponent('Hi PurePak, I just placed order #' + res.body.display_no + '.');
         cart = {}; renderProducts(); renderCartBar();
         showStep(3);
       })

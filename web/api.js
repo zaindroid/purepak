@@ -41,6 +41,11 @@ const API = (() => {
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const statusLabel = (s) => ({ new: 'New', confirmed: 'Confirmed', in_delivery: 'In delivery', delivered: 'Delivered', cancelled: 'Cancelled', pending: 'Pending', out_for_delivery: 'Out for delivery', failed: 'Failed', accrued: 'Accrued', paid: 'Paid', unpaid: 'Unpaid', partial: 'Partial' }[s] || s);
   const roleLabel = (r) => ({ admin: 'Admin', manager: 'Manager', shop_manager: 'Shop manager', finance: 'Finance', delivery: 'Delivery', employee: 'Employee', agent: 'Agent', customer: 'Customer' }[r] || r);
+  // Customers see the scattered display_no (doesn't reveal how many orders
+  // the business has ever processed); staff see the real id, which they
+  // actually use to look orders up. Falls back to the real id if display_no
+  // is ever missing from an older cached response, so this never blanks out.
+  const orderNo = (o) => (user && user.role !== 'customer') ? o.id : (o.display_no != null ? o.display_no : o.id);
 
   return {
     get token() { return token; }, get user() { return user; },
@@ -136,6 +141,6 @@ const API = (() => {
     kpis: () => g('/kpis'),
     monthly: () => g('/analytics/monthly'),
     topCustomers: () => g('/analytics/top-customers'),
-    fmtMoney, fmtDate, fmtDay, esc, statusLabel, roleLabel,
+    fmtMoney, fmtDate, fmtDay, esc, statusLabel, roleLabel, orderNo,
   };
 })();

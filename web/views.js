@@ -301,7 +301,7 @@ async function modalCreateOrder(opts = {}) {
     }
     try {
       const o = await API.createOrder(body);
-      closeModal(); toast('Order #' + o.id + ' placed', 'ok');
+      closeModal(); toast('Order #' + API.orderNo(o) + ' placed', 'ok');
       if (typeof opts.onPlaced === 'function') { try { opts.onPlaced(o); } catch {} }
       App.refresh();
     } catch (e) { toast(e.message, 'bad'); }
@@ -321,7 +321,7 @@ async function modalOrderDetail(id) {
   if (['admin', 'manager', 'shop_manager', 'finance'].includes(role) && o.payment_status !== 'paid') {
     actions += `<button class="btn" data-act="pay-order" data-id="${o.id}" data-due="${o.total - o.paid}">Record payment</button>`;
   }
-  openModal('Order #' + o.id, `
+  openModal('Order #' + API.orderNo(o), `
     <div style="display:flex;justify-content:space-between;align-items:center">
       <div><div class="t" style="font-weight:800;font-size:17px">${API.esc(o.customer_name)}</div>
       <div class="s" style="color:var(--ink-3);font-size:13px">${API.esc(o.customer_address || '')} ${o.customer_area ? '· ' + API.esc(o.customer_area) : ''}</div></div>
@@ -524,7 +524,7 @@ async function viewOrders({ status = '' } = {}) {
       return `
       <button class="ord-card" data-act="view-order" data-id="${o.id}">
         <div class="ord-top">
-          <span class="ord-id">Order #${o.id}</span>
+          <span class="ord-id">Order #${API.orderNo(o)}</span>
           ${V.chip(o.status)}
         </div>
         <div class="ord-items">${API.esc(o.items || '—')}</div>

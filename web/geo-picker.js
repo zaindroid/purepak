@@ -14,10 +14,11 @@
 (function () {
   'use strict';
   // Maps JavaScript API + Places API (New) key, restricted by HTTP referrer
-  // to purepak.zaindroid.me — same purepak-6472b Google Cloud project as
-  // Google Sign-In. Public API keys like this are meant to ship in client
-  // code; the referrer restriction (not secrecy) is what protects it.
-  var KEY = '';
+  // to purepak.zaindroid.me and *.purepak.com.pk — same purepak-6472b
+  // Google Cloud project as Google Sign-In. Public API keys like this are
+  // meant to ship in client code; the referrer restriction (not secrecy)
+  // is what protects it.
+  var KEY = 'AIzaSyC7Pufybzoh8WsFKvV5raCwbJZ2bqtrNFg';
   var DEFAULT_CENTER = { lat: 33.6844, lng: 73.0479 }; // Islamabad — sensible default, user can pan/drag anywhere
   var loadPromise = null;
 

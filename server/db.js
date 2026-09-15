@@ -560,6 +560,57 @@ function seedDemo(db) {
   return true;
 }
 
+// One reviewer login per role, alongside whatever real data already exists —
+// unlike seedDemo() (which only fires on a totally empty database) this runs
+// every boot so it works on the live production db too, and is idempotent
+// (checked by email, so re-running never duplicates or resets anything).
+// Purely so the owner can sign in as every role and check its view before
+// sending the app out for real use. TEST_ACCOUNT_EMAILS below is exported so
+// these can be found and deleted in one shot once that review is done —
+// leaving guessable-password accounts in a production database indefinitely
+// would be a real security hole once customers are on the live app.
+const TEST_ACCOUNT_PASSWORD = 'PurePakTest#2026';
+const TEST_ACCOUNTS = [
+  ['Test Admin', 'test-admin@purepak.test', 'admin', null],
+  ['Test Manager', 'test-manager@purepak.test', 'manager', 50000],
+  ['Test Shop Manager', 'test-shopmanager@purepak.test', 'shop_manager', 40000],
+  ['Test Finance', 'test-finance@purepak.test', 'finance', 40000],
+  ['Test Delivery', 'test-delivery@purepak.test', 'delivery', 25000],
+  ['Test Employee', 'test-employee@purepak.test', 'employee', 20000],
+  ['Test Agent', 'test-agent@purepak.test', 'agent', null],
+  ['Test Customer', 'test-customer@purepak.test', 'customer', null],
+];
+const TEST_ACCOUNT_EMAILS = TEST_ACCOUNTS.map(a => a[1]);
+
+function seedTestAccounts(db) {
+  const already = db.prepare('SELECT COUNT(*) c FROM users WHERE email IN (' +
+    TEST_ACCOUNT_EMAILS.map(() => '?').join(',') + ')').get(...TEST_ACCOUNT_EMAILS).c;
+  if (already === TEST_ACCOUNTS.length) return; // all already seeded
+
+  // one shared fake agent/customer for the roles that need one, kept
+  // separate from any real business record
+  let testAgentId = db.prepare(`SELECT id FROM agents WHERE name='Test Agent'`).get()?.id;
+  if (!testAgentId) {
+    testAgentId = db.prepare(`INSERT INTO agents(name,phone,commission_pct) VALUES ('Test Agent','0300-0000000',5)`)
+      .run().lastInsertRowid;
+  }
+  let testCustId = db.prepare(`SELECT id FROM customers WHERE name='Test Customer'`).get()?.id;
+  if (!testCustId) {
+    testCustId = db.prepare(`INSERT INTO customers(name,phone,type) VALUES ('Test Customer','0300-0000000','retail')`)
+      .run().lastInsertRowid;
+  }
+
+  const insU = db.prepare(`INSERT INTO users(name,email,phone,password_hash,role,salary,agent_id,customer_id,status)
+                           VALUES (?,?,?,?,?,?,?,?,'active')`);
+  const hash = hashPassword(TEST_ACCOUNT_PASSWORD);
+  for (const [name, email, role, salary] of TEST_ACCOUNTS) {
+    if (db.prepare('SELECT id FROM users WHERE email=?').get(email)) continue;
+    insU.run(name, email, null, hash, role, salary,
+      role === 'agent' ? testAgentId : null,
+      role === 'customer' ? testCustId : null);
+  }
+}
+
 function init() {
   applyPendingRestore();
   const db = open();
@@ -567,6 +618,7 @@ function init() {
   seedCatalog(db);
   const demo = process.env.PUREPAK_DEMO === '1';
   const seeded = demo ? seedDemo(db) : false;
+  seedTestAccounts(db);
   return { db, seeded, demo, DB_PATH };
 }
 
@@ -575,4 +627,4 @@ if (require.main === module) {
   console.log('PurePak DB ready: ' + r.DB_PATH + (r.demo ? (r.seeded ? ' (seeded demo data)' : ' (demo mode)') : ' (clean, no demo data)'));
 }
 
-module.exports = { init, open, hashPassword, verifyPassword, DB_PATH, RESTORE_PENDING };
+module.exports = { init, open, hashPassword, verifyPassword, DB_PATH, RESTORE_PENDING, TEST_ACCOUNT_EMAILS };

@@ -566,10 +566,13 @@ function seedDemo(db) {
 // (checked by email, so re-running never duplicates or resets anything).
 // Purely so the owner can sign in as every role and check its view before
 // sending the app out for real use. TEST_ACCOUNT_EMAILS below is exported so
-// these can be found and deleted in one shot once that review is done —
-// leaving guessable-password accounts in a production database indefinitely
-// would be a real security hole once customers are on the live app.
-const TEST_ACCOUNT_PASSWORD = 'PurePakTest#2026';
+// these can be found and deleted in one shot once that review is done.
+//
+// The password comes from PUREPAK_TEST_PASSWORD (set on the server, never
+// committed) rather than being hardcoded — this repo is public, and one of
+// these accounts is a full admin. No env var set = seeding is skipped
+// entirely, so a clone/fork of this repo never gets live test accounts.
+const TEST_ACCOUNT_PASSWORD = process.env.PUREPAK_TEST_PASSWORD || null;
 const TEST_ACCOUNTS = [
   ['Test Admin', 'test-admin@purepak.test', 'admin', null],
   ['Test Manager', 'test-manager@purepak.test', 'manager', 50000],
@@ -583,6 +586,7 @@ const TEST_ACCOUNTS = [
 const TEST_ACCOUNT_EMAILS = TEST_ACCOUNTS.map(a => a[1]);
 
 function seedTestAccounts(db) {
+  if (!TEST_ACCOUNT_PASSWORD) return;
   const already = db.prepare('SELECT COUNT(*) c FROM users WHERE email IN (' +
     TEST_ACCOUNT_EMAILS.map(() => '?').join(',') + ')').get(...TEST_ACCOUNT_EMAILS).c;
   if (already === TEST_ACCOUNTS.length) return; // all already seeded

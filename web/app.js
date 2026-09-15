@@ -203,6 +203,10 @@ const App = {
       else this.enter(r.user);
     } catch (err) {
       if (errEl) errEl.textContent = err.message || 'Test login failed';
+    } finally {
+      // re-enable even on success — the login screen isn't destroyed on
+      // logout (just hidden), so this same button has to work again next
+      // time it's shown, not stay disabled from the previous login
       if (btn) btn.disabled = false;
     }
   },

@@ -474,23 +474,61 @@ function haversineKm(a, b) {
 const GEO_CACHE = new Map(); // "addr|area" -> [lat,lng] | null
 let lastGeoAt = 0;
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-async function geocodeAddress(address, area) {
-  const key = (address + '|' + (area || '')).toLowerCase().trim();
-  if (GEO_CACHE.has(key)) return GEO_CACHE.get(key);
-  const q = address + (area ? ', ' + area : '') + ', Pakistan';
+// Islamabad/Rawalpindi-style sector code: a letter A-I, a 1-2 digit sector
+// number, optionally a /sub-sector — e.g. "e11" or "G-7/1". Nominatim only
+// reliably knows these as "G-7/1" (hyphen, capital letter); free-typed
+// addresses almost never come formatted that way, so normalize before
+// querying rather than giving up on a query that would otherwise match.
+function normalizeSector(raw) {
+  const m = /^\s*([a-iA-I])\s*-?\s*(\d{1,2})(?:\s*[\/\s]\s*(\d{1,2}))?\s*$/.exec(String(raw || ''));
+  if (!m) return null;
+  return m[1].toUpperCase() + '-' + m[2] + (m[3] ? '/' + m[3] : '');
+}
+// Same pattern, but pulled out of a longer free-text address like
+// "G-7/1 street 71 house 43" rather than requiring the whole field to be it.
+function extractSectorFromText(text) {
+  const m = /\b([a-iA-I])\s*-?\s*(\d{1,2})(?:\s*\/\s*(\d{1,2}))?\b/.exec(String(text || ''));
+  if (!m) return null;
+  return m[1].toUpperCase() + '-' + m[2] + (m[3] ? '/' + m[3] : '');
+}
+async function nominatimQuery(q) {
+  const now = Date.now();
+  if (now - lastGeoAt < 1100) await sleep(1100 - (now - lastGeoAt)); // respect Nominatim's 1 req/s policy
+  lastGeoAt = Date.now();
   const last = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=0&q=' +
     encodeURIComponent(q), {
     headers: { 'User-Agent': 'PurePakDeliveryApp/1.0 (contact@purepak.com.pk)', 'Accept-Language': 'en' },
   });
-  if (!last.ok) {
-    // don't cache a transient failure (rate limit, 5xx) as a permanent
-    // "not found" — only a real empty result should stick
-    console.warn('geocode HTTP ' + last.status + ' for: ' + q);
-    return null;
-  }
+  if (!last.ok) { console.warn('geocode HTTP ' + last.status + ' for: ' + q); return null; }
   const rows = await last.json();
-  const hit = rows && rows[0] ? [Number(rows[0].lat), Number(rows[0].lon)] : null;
-  if (!hit) console.warn('geocode: no match for: ' + q);
+  return rows && rows[0] ? [Number(rows[0].lat), Number(rows[0].lon)] : null;
+}
+// Full free-text Pakistani addresses (house numbers, informal street
+// descriptions) almost never match anything in OSM — confirmed live: even a
+// throwaway nonsense address fails identically to a real one. What DOES
+// reliably match is the sector/neighbourhood itself ("E-11", "G-7/1",
+// "Johar Town"), so fall back to that rather than leaving the stop with no
+// position at all. The result is neighbourhood-accurate, not house-accurate
+// — good enough to route by and get the driver to the right block; the
+// exact address/phone is still shown for the last stretch.
+async function geocodeAddress(address, area) {
+  const key = (address + '|' + (area || '')).toLowerCase().trim();
+  if (GEO_CACHE.has(key)) return GEO_CACHE.get(key);
+  const full = address + (area ? ', ' + area : '') + ', Pakistan';
+  let hit = await nominatimQuery(full);
+  if (!hit && area) {
+    const sector = normalizeSector(area) || area;
+    hit = await nominatimQuery(sector + ', Pakistan');
+    if (hit) console.warn('geocode: approximate (area-level) match for: ' + full);
+  }
+  if (!hit) {
+    const sector = extractSectorFromText(address) || extractSectorFromText(area);
+    if (sector) {
+      hit = await nominatimQuery(sector + ', Pakistan');
+      if (hit) console.warn('geocode: approximate (sector-extracted) match for: ' + full);
+    }
+  }
+  if (!hit) console.warn('geocode: no match at any level for: ' + full);
   GEO_CACHE.set(key, hit);
   return hit;
 }
@@ -500,9 +538,6 @@ async function fillMissingCoords(deliveryRows, maxGeocodes) {
   let done = 0;
   for (const d of need) {
     if (done >= maxGeocodes) break;
-    const now = Date.now();
-    if (now - lastGeoAt < 1100) await sleep(1100 - (now - lastGeoAt)); // respect Nominatim 1 req/s
-    lastGeoAt = Date.now();
     try {
       const hit = await geocodeAddress(d.customer_address, d.customer_area);
       if (hit) {
@@ -1713,7 +1748,12 @@ async function handleApi(req, res, url) {
       ? { lat: Number(sLat), lng: Number(sLng) }
       : { lat: 33.61, lng: 73.07 }; // PurePak HQ (Golra Rd, ISB) as depot fallback
     // Best-effort geocode any stops missing coords (cap per request to stay fast + polite)
-    await fillMissingCoords(open, 5);
+    // each address can now cost up to 3 throttled Nominatim calls (full
+    // address, then area, then a sector pulled from the address text) —
+    // capped lower than before to keep this page load reasonably fast;
+    // results are cached forever once found, so this only bites on an
+    // address's first few loads
+    await fillMissingCoords(open, 3);
     const plan = optimizeRoute(open, start);
     plan.start = start;
     plan.open_count = open.length;

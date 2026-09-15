@@ -92,16 +92,75 @@
       fireChange();
     }
 
-    var autocomplete = new google.maps.places.Autocomplete(addressInput, {
-      componentRestrictions: { country: 'pk' },
-      fields: ['formatted_address', 'geometry', 'name'],
+    // google.maps.places.Autocomplete (the old attach-to-an-<input> widget)
+    // was cut off from new API customers on 2025-03-01, so this uses the
+    // current Autocomplete Data API instead: fetch suggestions ourselves and
+    // render our own dropdown, rather than a Google-owned widget replacing
+    // the input.
+    var sessionToken = null;
+    var dropdown = null, activeIndex = -1, currentSuggestions = [];
+
+    function closeDropdown() {
+      if (dropdown) { dropdown.remove(); dropdown = null; }
+      activeIndex = -1; currentSuggestions = [];
+    }
+    function setActive(items) {
+      items.forEach(function (it, i) { it.classList.toggle('active', i === activeIndex); });
+    }
+    function renderDropdown(suggestions) {
+      closeDropdown();
+      var preds = suggestions.filter(function (s) { return s.placePrediction; });
+      if (!preds.length) return;
+      currentSuggestions = preds;
+      dropdown = document.createElement('div');
+      dropdown.className = 'geo-suggest';
+      preds.forEach(function (s, i) {
+        var item = document.createElement('div');
+        item.className = 'geo-suggest-item';
+        item.textContent = s.placePrediction.text.text;
+        // mousedown (not click) fires before the input's blur, so the
+        // dropdown doesn't close itself out from under the click
+        item.addEventListener('mousedown', function (e) { e.preventDefault(); selectSuggestion(s); });
+        dropdown.appendChild(item);
+      });
+      addressInput.insertAdjacentElement('afterend', dropdown);
+    }
+    async function selectSuggestion(s) {
+      closeDropdown();
+      try {
+        var place = s.placePrediction.toPlace();
+        await place.fetchFields({ fields: ['formattedAddress', 'location'] });
+        if (place.formattedAddress) addressInput.value = place.formattedAddress;
+        if (place.location) setPin({ lat: place.location.lat(), lng: place.location.lng() }, 17);
+      } catch (e) {
+        // fetchFields failed — the address text the user picked is still
+        // sitting in the input either way, so manual submission still works
+      }
+      sessionToken = null; // a picked place ends the billing session; next keystroke starts a fresh one
+    }
+    var debounceTimer = null;
+    addressInput.addEventListener('input', function () {
+      clearTimeout(debounceTimer);
+      var text = addressInput.value.trim();
+      if (text.length < 3) { closeDropdown(); return; }
+      debounceTimer = setTimeout(async function () {
+        try {
+          if (!sessionToken) sessionToken = new google.maps.places.AutocompleteSessionToken();
+          var res = await google.maps.places.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+            input: text, sessionToken: sessionToken, includedRegionCodes: ['pk'],
+          });
+          renderDropdown((res && res.suggestions) || []);
+        } catch (e) { closeDropdown(); } // API hiccup — typed text is still a perfectly valid manual address
+      }, 300);
     });
-    autocomplete.addListener('place_changed', function () {
-      var place = autocomplete.getPlace();
-      if (!place || !place.geometry || !place.geometry.location) return; // user typed & hit enter without picking — stays manual
-      var loc = { lat: place.geometry.location.lat(), lng: place.geometry.location.lng() };
-      if (place.formatted_address) addressInput.value = place.formatted_address;
-      setPin(loc, 17);
+    addressInput.addEventListener('blur', function () { setTimeout(closeDropdown, 150); });
+    addressInput.addEventListener('keydown', function (e) {
+      if (!dropdown) return;
+      var items = dropdown.querySelectorAll('.geo-suggest-item');
+      if (e.key === 'ArrowDown') { e.preventDefault(); activeIndex = Math.min(activeIndex + 1, items.length - 1); setActive(items); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); activeIndex = Math.max(activeIndex - 1, 0); setActive(items); }
+      else if (e.key === 'Enter' && activeIndex >= 0) { e.preventDefault(); selectSuggestion(currentSuggestions[activeIndex]); }
+      else if (e.key === 'Escape') { closeDropdown(); }
     });
 
     if (pinBtn) {

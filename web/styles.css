@@ -323,6 +323,10 @@ table.matrix .base{color:var(--ink-3);font-size:11px}
 .pin-btn:disabled{opacity:.5;cursor:default}
 .geo-map{width:100%;height:200px;border-radius:11px;border:1.5px solid var(--line);margin:2px 0 10px;overflow:hidden}
 .pin-hint{font-size:11.5px;color:var(--ink-3);margin:-6px 0 10px}
+.geo-suggest{border:1.5px solid var(--line);border-radius:11px;margin:-4px 0 10px;overflow:hidden;box-shadow:0 6px 16px rgba(8,20,35,.08)}
+.geo-suggest-item{padding:9px 12px;font-size:13.5px;color:var(--ink);cursor:pointer;border-top:1px solid var(--line-2)}
+.geo-suggest-item:first-child{border-top:none}
+.geo-suggest-item.active,.geo-suggest-item:hover{background:var(--blue-50)}
 
 /* filters */
 .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}

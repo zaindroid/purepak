@@ -377,7 +377,7 @@ async function modalOrderDetail(id) {
     <div style="display:flex;justify-content:space-between;align-items:center">
       <div><div class="t" style="font-weight:800;font-size:17px">${API.esc(o.customer_name)}</div>
       <div class="s" style="color:var(--ink-3);font-size:13px">${API.esc(o.customer_address || '')} ${o.customer_area ? '· ' + API.esc(o.customer_area) : ''}</div></div>
-      <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">${V.chip(o.status)}${o.discount_amount > 0 ? `<span class="chip approved">Rs ${o.discount_amount}/bottle off</span>` : ''}</div>
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">${V.chip(o.status)}${role !== 'customer' && o.discount_amount > 0 ? `<span class="chip approved">Rs ${o.discount_amount}/bottle off</span>` : ''}</div>
     </div>
     <div class="progress"><i style="width:${payPct}%"></i></div>
     <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-3)"><span>Paid ${API.fmtMoney(o.paid)} of ${API.fmtMoney(o.total)}</span><span>${API.fmtDay(o.placed_at)}</span></div>
@@ -593,7 +593,6 @@ async function viewOrders({ status = '' } = {}) {
           <span class="ord-date">${API.fmtDay(o.placed_at)} &middot; ${PAY_LABEL[o.payment_method] || PAY_LABEL.cod}</span>
           <span class="ord-total">${API.fmtMoney(o.total)}</span>
         </div>
-        ${o.discount_amount > 0 ? `<div class="ord-due" style="color:var(--green-ink)">Discount applied &middot; Rs ${o.discount_amount}/bottle</div>` : ''}
         ${bal > 0 && o.status !== 'cancelled'
           ? `<div class="ord-due">Balance ${API.fmtMoney(bal)} &middot; ${API.statusLabel(o.payment_status)}</div>` : ''}
       </button>`;

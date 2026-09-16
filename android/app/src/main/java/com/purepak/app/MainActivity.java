@@ -569,7 +569,7 @@ public class MainActivity extends AppCompatActivity {
 
         @android.webkit.JavascriptInterface
         public String version() {
-            return "2.2";
+            return "2.3";
         }
 
         // the page calls this instead of rendering Google's own web button,

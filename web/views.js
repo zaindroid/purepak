@@ -228,7 +228,23 @@ async function modalCreateOrder(opts = {}) {
     custHtml = role === 'customer' ? '' : `<div class="field"><span>Customer</span><input value="${API.esc(opts.customer.name)}" disabled></div>`;
   } else {
     const customers = await API.customers();
-    custHtml = `<div class="field"><span>Customer</span><select id="ocCustomer">${customers.map(c => `<option value="${c.id}">${API.esc(c.name)} · ${API.esc(c.area || '')}</option>`).join('')}</select></div>`;
+    const canAddCustomer = ['admin', 'manager', 'agent'].includes(role);
+    custHtml = `<div class="field"><span>Customer</span>
+        ${canAddCustomer ? `<button type="button" class="btn ghost sm" id="ocNewCustBtn" style="float:right;margin-top:-30px">+ New customer</button>` : ''}
+        <select id="ocCustomer">${customers.map(c => `<option value="${c.id}">${API.esc(c.name)} · ${API.esc(c.area || '')}</option>`).join('')}</select>
+      </div>
+      ${canAddCustomer ? `<div id="ocNewCustBox" hidden style="background:var(--blue-50);border-radius:11px;padding:10px;margin:-4px 0 10px">
+        <div class="row2" style="margin-bottom:8px">
+          <input id="ncoName" class="input" placeholder="Business / person name">
+          <input id="ncoPhone" class="input" placeholder="03xx-xxxxxxx">
+        </div>
+        <div class="row2" style="margin-bottom:8px">
+          <input id="ncoArea" class="input" placeholder="Area (optional)">
+          <select id="ncoType" class="input"></select>
+        </div>
+        <input id="ncoDiscount" class="input" style="width:100%;margin-bottom:8px" type="number" min="0" placeholder="Negotiated discount — Rs off per bottle (optional)">
+        <button type="button" class="btn primary sm block" id="ocNewCustSave">Add &amp; select</button>
+      </div>` : ''}`;
   }
   let agentHtml = '';
   if (role === 'admin') {
@@ -254,6 +270,41 @@ async function modalCreateOrder(opts = {}) {
     <div class="field"><span>Note (optional)</span><input id="ocNotes" placeholder="Delivery note"></div>
     <div id="ocTotal" class="money-lg" style="text-align:right"></div>`,
     `<button class="btn" data-close-modal>Cancel</button><button class="btn primary" id="ocSubmit">Place order</button>`);
+  // inline "+ New customer" — lets an agent (or admin/manager) add a
+  // customer without losing the items they've already picked for this order
+  const newCustBtn = document.getElementById('ocNewCustBtn');
+  if (newCustBtn) {
+    API.customerTypes().then(types => {
+      const sel = document.getElementById('ncoType');
+      if (sel) sel.innerHTML = types.map(t => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('');
+    }).catch(() => {});
+    newCustBtn.addEventListener('click', () => {
+      const box = document.getElementById('ocNewCustBox');
+      box.hidden = !box.hidden;
+      newCustBtn.textContent = box.hidden ? '+ New customer' : 'Cancel';
+    });
+    document.getElementById('ocNewCustSave').addEventListener('click', async () => {
+      const b = {
+        name: document.getElementById('ncoName').value.trim(),
+        phone: document.getElementById('ncoPhone').value.trim(),
+        area: document.getElementById('ncoArea').value.trim() || null,
+        type: document.getElementById('ncoType').value,
+        discount_amount: Number(document.getElementById('ncoDiscount').value) || 0,
+      };
+      if (!b.name || !b.phone) { toast('Name and phone are required', 'warn'); return; }
+      try {
+        const c = await API.createCustomer(b);
+        const sel = document.getElementById('ocCustomer');
+        const opt = document.createElement('option');
+        opt.value = c.id; opt.textContent = c.name + (c.area ? ' · ' + c.area : '');
+        sel.appendChild(opt);
+        sel.value = c.id;
+        document.getElementById('ocNewCustBox').hidden = true;
+        newCustBtn.textContent = '+ New customer';
+        toast('Customer added', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    });
+  }
   const totalEl = document.getElementById('ocTotal');
   const methodEl = document.getElementById('ocMethod');
   const hintEl = document.getElementById('ocPayHint');
@@ -326,7 +377,7 @@ async function modalOrderDetail(id) {
     <div style="display:flex;justify-content:space-between;align-items:center">
       <div><div class="t" style="font-weight:800;font-size:17px">${API.esc(o.customer_name)}</div>
       <div class="s" style="color:var(--ink-3);font-size:13px">${API.esc(o.customer_address || '')} ${o.customer_area ? '· ' + API.esc(o.customer_area) : ''}</div></div>
-      ${V.chip(o.status)}
+      <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">${V.chip(o.status)}${o.discount_amount > 0 ? `<span class="chip approved">Rs ${o.discount_amount}/bottle off</span>` : ''}</div>
     </div>
     <div class="progress"><i style="width:${payPct}%"></i></div>
     <div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--ink-3)"><span>Paid ${API.fmtMoney(o.paid)} of ${API.fmtMoney(o.total)}</span><span>${API.fmtDay(o.placed_at)}</span></div>
@@ -441,7 +492,7 @@ function modalAddAgent() {
 
 // ================= ADMIN =================
 async function viewAdminDashboard() {
-  const [k, monthlyRaw, top, orders] = await Promise.all([API.kpis(), API.monthly(), API.topCustomers(), API.orders()]);
+  const [k, monthlyRaw, top, orders, stockProducts] = await Promise.all([API.kpis(), API.monthly(), API.topCustomers(), API.orders(), API.products()]);
   // only show the trend chart once there's more than one month of real history;
   // a row of empty bars reads as "broken", not "new business"
   const monthly = (monthlyRaw || []).filter(m => (m.income || 0) > 0 || (m.expense || 0) > 0);
@@ -490,6 +541,15 @@ async function viewAdminDashboard() {
       ${top.map((t, i) => `<div class="list-row"><div class="grow"><div class="t">${i + 1}. ${API.esc(t.name)}</div><div class="s">${V.plural(t.orders, 'order')}</div></div><div style="font-weight:700">${API.fmtMoney(t.sales)}</div></div>`).join('') || '<div class="empty">No data</div>'}
     </div>
   </div>
+  <div class="grid grid-2col" style="margin-top:14px">
+    <div class="card">
+      <div class="card-head"><h2>Stock on hand</h2><div class="spacer"></div><button class="btn sm ghost" data-act="nav" data-to="production">Production &amp; stock →</button></div>
+      ${stockProducts.filter(p => p.active).map(p => `<div class="list-row">
+        <div class="grow"><div class="t">${API.esc(p.name)}</div><div class="s">${sizeLabel(p.size_ml)}</div></div>
+        <div style="font-weight:800${p.stock <= 0 ? ';color:var(--red-ink)' : ''}">${p.stock}</div>
+      </div>`).join('') || '<div class="empty">No products yet</div>'}
+    </div>
+  </div>
   <div class="card" style="margin-top:14px">
     <div class="card-head"><h2>Recent orders</h2><div class="spacer"></div><button class="btn sm ghost" data-act="nav" data-to="orders">View all</button></div>
     ${orders.slice(0, 6).map(o => `
@@ -533,6 +593,7 @@ async function viewOrders({ status = '' } = {}) {
           <span class="ord-date">${API.fmtDay(o.placed_at)} &middot; ${PAY_LABEL[o.payment_method] || PAY_LABEL.cod}</span>
           <span class="ord-total">${API.fmtMoney(o.total)}</span>
         </div>
+        ${o.discount_amount > 0 ? `<div class="ord-due" style="color:var(--green-ink)">Discount applied &middot; Rs ${o.discount_amount}/bottle</div>` : ''}
         ${bal > 0 && o.status !== 'cancelled'
           ? `<div class="ord-due">Balance ${API.fmtMoney(bal)} &middot; ${API.statusLabel(o.payment_status)}</div>` : ''}
       </button>`;
@@ -551,7 +612,7 @@ async function viewOrders({ status = '' } = {}) {
     <tbody>${orders.map(o => `
       <tr style="cursor:pointer" data-act="view-order" data-id="${o.id}">
         <td class="cell-main" data-l="Order">#${o.id} <span class="muted" style="font-weight:600;font-size:12px">${API.fmtDay(o.placed_at)}</span></td>
-        ${V.m('Customer', `${API.esc(o.customer_name)}<div class="muted">${API.esc(o.customer_area || '')}</div>`)}
+        ${V.m('Customer', `${API.esc(o.customer_name)}<div class="muted">${API.esc(o.customer_area || '')}${o.discount_amount > 0 ? ` <span class="chip approved" style="padding:1px 6px;font-size:10px">Rs ${o.discount_amount} off</span>` : ''}</div>`)}
         ${V.m('Items', API.esc(o.items || '—'), 'muted')}
         ${API.user.role !== 'customer' ? V.m('Agent', o.agent_name ? API.esc(o.agent_name) : '<span class="muted">—</span>', 'muted') : ''}
         ${V.m('Total', API.fmtMoney(o.total), 'tv num')}
@@ -1739,7 +1800,7 @@ function receiptCard(r, canReview, isStaging) {
   <div class="card card-pad" style="${isStaging ? 'border-left:3px solid var(--amber)' : 'border-left:3px solid var(--green)'}">
     <div style="display:flex;gap:12px;align-items:flex-start">
       <a href="${API.receiptImage(r.id)}?token=${API.token}" target="_blank" style="flex:0 0 74px">
-        <img src="${API.receiptImage(r.id)}?token=${API.token}" style="width:74px;height:92px;object-fit:cover;border-radius:8px;border:1px solid var(--line)" alt="receipt ${r.id}">
+        <img src="${API.receiptImage(r.id)}?token=${API.token}" loading="lazy" style="width:74px;height:92px;object-fit:cover;border-radius:8px;border:1px solid var(--line)" alt="receipt ${r.id}">
       </a>
       <div style="flex:1;min-width:0">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
@@ -2315,7 +2376,10 @@ function modalEditCustomer(id) {
           <select id="cuType" class="input" style="width:100%;margin-bottom:4px">
             ${types.map(t => `<option value="${t}" ${t === c.type ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}
           </select>
-          <p class="muted" style="font-size:11.5px;margin-top:8px">New orders use the price list for this type. Blank cells in the price list fall back to the base price.</p>
+          <p class="muted" style="font-size:11.5px;margin:8px 0 12px">New orders use the price list for this type. Blank cells in the price list fall back to the base price.</p>
+          <label class="muted">Negotiated discount (Rs off per bottle, optional)</label>
+          <input id="cuDiscount" class="input" style="width:100%" type="number" min="0" step="1" value="${c.discount_amount ? c.discount_amount : ''}" placeholder="e.g. 5">
+          <p class="muted" style="font-size:11.5px;margin-top:6px">Applied on top of their type's price on every bottle, every order — shown to them automatically. Leave blank for no discount.</p>
         </div>`,
         `<button class="btn ghost" data-close-modal>Cancel</button>
          <button class="btn primary" id="cuSave">Save</button>`);
@@ -2337,6 +2401,7 @@ function modalEditCustomer(id) {
           area: document.getElementById('cuArea').value.trim() || null,
           address: document.getElementById('cuAddress').value.trim() || null,
           type: document.getElementById('cuType').value,
+          discount_amount: Number(document.getElementById('cuDiscount').value) || 0,
           lat: cuLat, lng: cuLng,
         };
         try {

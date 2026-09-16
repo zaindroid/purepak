@@ -250,6 +250,25 @@ public class MainActivity extends AppCompatActivity {
                 deliverPushToken();
                 if (pendingPushRef != null) { sendPushRefToPage(pendingPushRef); pendingPushRef = null; }
             }
+
+            // Without this override, Android's documented default behaviour is
+            // to crash the whole app the moment the WebView's renderer process
+            // dies — e.g. a memory spike from decoding several full-resolution
+            // receipt photos at once on a lower-end phone. Recreating the
+            // WebView and reloading turns that into a quick reload instead of
+            // "the app crashed". Only called on API 26+; harmless no-op below
+            // that (the OS never invokes it on older WebView implementations).
+            @Override
+            public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
+                Log.w(TAG, "WebView renderer gone (crashed=" + detail.didCrash() + ") — recreating");
+                if (v == web) {
+                    android.view.ViewGroup parent = (android.view.ViewGroup) web.getParent();
+                    if (parent != null) parent.removeView(web);
+                    web.destroy();
+                    runOnUiThread(() -> recreate());
+                }
+                return true; // we handled it — don't let the system kill the app
+            }
         });
 
         // JS bridge: window.PurePak.{toast, openSettings, version}

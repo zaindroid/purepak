@@ -29,7 +29,7 @@ const check = (n, ok, extra = '') => { if (!ok) { fails++; console.log('FAIL', n
   await sleep(1200); // let the products fetch + initial render land
 
   const cards = document.querySelectorAll('#prodList .prod');
-  check('product cards rendered from the API', cards.length === 5, cards.length);
+  check('product cards rendered from the API', cards.length === 7, cards.length);
   check('cart bar starts hidden (empty basket)', document.getElementById('cartBar').hidden === true);
 
   // add two of the 12L bottle

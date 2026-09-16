@@ -312,6 +312,9 @@ function migrate(db) {
   if (!cols.includes('lat')) db.exec('ALTER TABLE customers ADD COLUMN lat REAL');
   if (!cols.includes('lng')) db.exec('ALTER TABLE customers ADD COLUMN lng REAL');
   if (!cols.includes('type')) db.exec(`ALTER TABLE customers ADD COLUMN type TEXT NOT NULL DEFAULT 'retail'`);
+  // a negotiated flat Rs-off-per-bottle rate for one specific customer, on
+  // top of whatever their type (retail/wholesale/...) already resolves to
+  if (!cols.includes('discount_amount')) db.exec('ALTER TABLE customers ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0');
 
   const pcols = db.prepare(`PRAGMA table_info(products)`).all().map(c => c.name);
   if (!pcols.includes('image_url')) db.exec('ALTER TABLE products ADD COLUMN image_url TEXT');
@@ -406,6 +409,10 @@ function migrate(db) {
 
   const ocols = db.prepare(`PRAGMA table_info(orders)`).all().map(c => c.name);
   if (!ocols.includes('payment_method')) db.exec(`ALTER TABLE orders ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cod'`);
+  // snapshot of the customer's per-bottle discount at the moment this order
+  // was placed — kept separate from customers.discount_amount so a later
+  // change to the customer's rate never rewrites the history of past orders
+  if (!ocols.includes('discount_amount')) db.exec(`ALTER TABLE orders ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0`);
 
   // ledger: append-only + audit-trail columns (added for the tamper-evident books)
   const lcols = db.prepare(`PRAGMA table_info(ledger)`).all().map(c => c.name);
@@ -430,8 +437,10 @@ function seedCatalog(db) {
   // Products — PurePak's real lineup from purepak.com.pk
   const insP = db.prepare('INSERT INTO products(name,size_ml,price,description) VALUES (?,?,?,?)');
   const products = [
-    ['Pure Pak 500 ML', 500, 10, 'Portable bottled drinking water'],
-    ['Pure Pak 1.5 L', 1500, 20, 'Everyday bottled drinking water'],
+    ['Pure Pak 500 ML - Pure', 500, 10, 'Portable bottled drinking water'],
+    ['Pure Pak 500 ML - Mix', 500, 10, 'Portable bottled drinking water, mixed'],
+    ['Pure Pak 1.5 L - Pure', 1500, 20, 'Everyday bottled drinking water'],
+    ['Pure Pak 1.5 L - Mix', 1500, 20, 'Everyday bottled drinking water, mixed'],
     ['Pure Pak 6 L', 6000, 45, 'Family-size drinking water'],
     ['Pure Pak 12 L', 12000, 80, 'Office & home dispenser water'],
     ['Pure Pak 19 L', 19000, 110, 'Dispenser-grade drinking water'],

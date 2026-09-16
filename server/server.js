@@ -386,14 +386,18 @@ function requireRole(user, roles) {
 }
 function httpError(code, msg) { const e = new Error(msg); e.code = code; return e; }
 
-// price for a product given the customer's type (matrix override falls back to base price)
-function priceForCustomer(productId, customerType) {
+// price for a product given the customer's type (matrix override falls back to base
+// price), then a flat negotiated per-bottle discount on top, if this particular
+// customer has one — never below 0 regardless of how large the discount is
+function priceForCustomer(productId, customerType, discountAmount) {
   const base = db.prepare('SELECT price FROM products WHERE id=?').get(productId)?.price;
+  let price = base;
   if (customerType) {
     const row = db.prepare('SELECT price FROM product_prices WHERE product_id=? AND customer_type=?').get(productId, customerType);
-    if (row && row.price != null) return row.price;
+    if (row && row.price != null) price = row.price;
   }
-  return base;
+  const discount = Number(discountAmount) || 0;
+  return discount > 0 ? Math.max(0, price - discount) : price;
 }
 
 function newSession(user) {
@@ -1212,9 +1216,9 @@ async function handleApi(req, res, url) {
     // returning customer automatically gets their real pricing tier back
     const digitsOf = (p) => String(p || '').replace(/\D/g, '');
     const cust = db.prepare('SELECT * FROM customers').all().find(c => digitsOf(c.phone) === phoneDigits);
-    let custId, custType, deliveryNote = null;
+    let custId, custType, custDiscount = 0, deliveryNote = null;
     if (cust) {
-      custId = cust.id; custType = cust.type;
+      custId = cust.id; custType = cust.type; custDiscount = cust.discount_amount || 0;
       if (!cust.address || !cust.address.trim()) {
         db.prepare('UPDATE customers SET address=?, area=COALESCE(area,?) WHERE id=?').run(address, area, custId);
       } else if (cust.address.trim() !== address) {
@@ -1233,7 +1237,7 @@ async function handleApi(req, res, url) {
       const p = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(it.product_id);
       if (!p) return err(res, 400, 'Unknown product');
       const qty = Math.max(1, Math.min(50, Math.round(Number(it.qty) || 1)));
-      const price = priceForCustomer(p.id, custType);
+      const price = priceForCustomer(p.id, custType, custDiscount);
       total += qty * price;
       prepared.push([p.id, qty, price, qty * price]);
     }
@@ -1245,8 +1249,8 @@ async function handleApi(req, res, url) {
     const guestNote = String(b.notes || '').trim().slice(0, 300) || null;
     const notes = [src ? `QR: ${src}` : null, deliveryNote, guestNote].filter(Boolean).join(' · ') || null;
 
-    const r = db.prepare(`INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,payment_method,notes)
-                          VALUES (?,?,?,?,?,?,?,?)`).run(custId, null, 'new', total, 0, 'unpaid', 'cod', notes);
+    const r = db.prepare(`INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,payment_method,notes,discount_amount)
+                          VALUES (?,?,?,?,?,?,?,?,?)`).run(custId, null, 'new', total, 0, 'unpaid', 'cod', notes, custDiscount);
     const orderId = r.lastInsertRowid;
     const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
     for (const row of prepared) insOI.run(orderId, ...row);
@@ -1449,6 +1453,7 @@ async function handleApi(req, res, url) {
     const rows = all
       ? db.prepare('SELECT * FROM products').all()
       : db.prepare('SELECT * FROM products WHERE active=1').all();
+    const callerCust = user && user.customer_id ? db.prepare('SELECT type, discount_amount FROM customers WHERE id=?').get(user.customer_id) : null;
     const out = rows.map(p => {
       const o = { ...p };
       // per-type overrides (already nested by the pricing matrix)
@@ -1457,10 +1462,9 @@ async function handleApi(req, res, url) {
         const r = db.prepare('SELECT price FROM product_prices WHERE product_id=? AND customer_type=?').get(p.id, t);
         o.prices[t] = (r && r.price != null) ? r.price : null;
       }
-      // effective price the caller actually pays (their type; base for staff)
-      o.effective_price = priceForCustomer(p.id, user && user.customer_id
-        ? db.prepare('SELECT type FROM customers WHERE id=?').get(user.customer_id)?.type || null
-        : null);
+      // effective price the caller actually pays (their type + any negotiated
+      // per-bottle discount; base price for staff, who aren't a customer)
+      o.effective_price = priceForCustomer(p.id, callerCust ? callerCust.type : null, callerCust ? callerCust.discount_amount : 0);
       return o;
     });
     return json(res, 200, out);
@@ -1572,7 +1576,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, db.prepare('SELECT c.*, (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id) AS orders_count FROM customers c ORDER BY c.name').all());
   }
   if (method === 'POST' && parts[1] === 'customers') {
-    requireRole(user, ['admin', 'manager']);
+    requireRole(user, ['admin', 'manager', 'agent']);
     const b = await readBody(req);
     if (!b.name || !b.phone) return err(res, 400, 'name and phone required');
     const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
@@ -1580,9 +1584,10 @@ async function handleApi(req, res, url) {
     const cLat = b.lat, cLng = b.lng;
     const hasLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
       Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
-    const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type,lat,lng) VALUES (?,?,?,?,?,?,?,?,?)')
+    const discountAmount = Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0;
+    const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type,lat,lng,discount_amount) VALUES (?,?,?,?,?,?,?,?,?,?)')
       .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type,
-        hasLatLng ? cLat : null, hasLatLng ? cLng : null);
+        hasLatLng ? cLat : null, hasLatLng ? cLng : null, discountAmount);
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
     return json(res, 201, db.prepare('SELECT * FROM customers WHERE id=?').get(r.lastInsertRowid));
   }
@@ -1596,10 +1601,14 @@ async function handleApi(req, res, url) {
     if (!cur) return err(res, 404, 'Customer not found');
     const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
     const wantType = !ownRecord && b.type && types.includes(b.type) ? b.type : cur.type;
+    // never settable by the customer themselves — same reasoning as their pricing type
+    const wantDiscount = !ownRecord && b.discount_amount !== undefined
+      ? (Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0)
+      : cur.discount_amount;
     const cLat = b.lat, cLng = b.lng;
     const hasLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
       Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
-    db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=?, lat=?, lng=? WHERE id=?`)
+    db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=?, lat=?, lng=?, discount_amount=? WHERE id=?`)
       .run(ownRecord ? cur.name : (b.name != null ? String(b.name).trim() || cur.name : cur.name),
         b.contact_name !== undefined ? (b.contact_name || null) : cur.contact_name,
         b.phone != null ? String(b.phone).trim() || cur.phone : cur.phone,
@@ -1609,11 +1618,12 @@ async function handleApi(req, res, url) {
         wantType,
         hasLatLng ? cLat : (b.address !== undefined && b.address !== cur.address ? null : cur.lat),
         hasLatLng ? cLng : (b.address !== undefined && b.address !== cur.address ? null : cur.lng),
+        wantDiscount,
         cid);
     b.type = wantType; // downstream checks use b.type
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
-    // a customer-type change reprices that ONE customer's catalog — nudge only their shop
-    if (b.type && types.includes(b.type) && b.type !== cur.type) {
+    // a type or discount change reprices that ONE customer's catalog — nudge only their shop
+    if ((b.type && types.includes(b.type) && b.type !== cur.type) || wantDiscount !== cur.discount_amount) {
       const cu = db.prepare('SELECT id FROM users WHERE customer_id=?').get(+parts[2]);
       if (cu) sseSend(cu.id, 'pricing');
     }
@@ -1700,8 +1710,9 @@ async function handleApi(req, res, url) {
       const p = db.prepare('SELECT * FROM products WHERE id=?').get(it.product_id);
       if (!p) throw httpError(400, 'Unknown product ' + it.product_id);
       const qty = Math.max(1, Math.min(999, Math.round(Number(it.qty) || 1)));
-      // price per the customer's type (matrix override), else base price
-      const price = priceForCustomer(p.id, cust.type);
+      // price per the customer's type (matrix override) then their own
+      // negotiated per-bottle discount on top, else base price
+      const price = priceForCustomer(p.id, cust.type, cust.discount_amount);
       total += qty * price;
       return [p.id, qty, price, qty * price];
     });
@@ -1710,8 +1721,8 @@ async function handleApi(req, res, url) {
     if (user.role === 'agent') agentId = user.agent_id;
     if (user.role === 'customer' && agentId) agentId = b.agent_id; // admin/agent pick; customer optional
     const method = PAY_METHOD_IDS.has(b.payment_method) ? b.payment_method : 'cod';
-    const r = db.prepare('INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,payment_method,notes) VALUES (?,?,?,?,?,?,?,?)')
-      .run(custId, agentId, 'new', total, 0, 'unpaid', method, b.notes || null);
+    const r = db.prepare('INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,payment_method,notes,discount_amount) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(custId, agentId, 'new', total, 0, 'unpaid', method, b.notes || null, cust.discount_amount || 0);
     const orderId = r.lastInsertRowid;
     const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
     for (const row of prepared) insOI.run(orderId, ...row);

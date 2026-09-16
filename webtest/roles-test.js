@@ -90,7 +90,7 @@ const login = async (email) => (await req('POST', '/api/auth/login', null, { ema
 
   console.log('== pricing matrix ==');
   const pricing = (await req('GET', '/api/pricing', admin)).data;
-  ok(Array.isArray(pricing) && pricing.length === 5 && pricing[0].prices, 'pricing matrix returned', pricing.length);
+  ok(Array.isArray(pricing) && pricing.length === 7 && pricing[0].prices, 'pricing matrix returned', pricing.length);
   const p500 = pricing.find(p => p.size_ml === 500);
   ok(p500.prices.wholesale === 8 && p500.price === 10, 'wholesale override present, base fallback present');
   const save = await req('POST', '/api/pricing', admin, [{ product_id: p500.id, customer_type: 'wholesale', price: 7 }]);

@@ -942,18 +942,21 @@ async function viewAgentCustomers() {
   return `
   <div class="page-head"><h1>My customers</h1></div>
   <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Customers you've referred an order for. Rate and discount are set by the office; commission earned updates as their orders are placed.</p>
-  ${customers.map(c => `
-  <div class="team-row">
+  ${customers.map(c => {
+    const bal = Math.round(((c.total_spent || 0) - (c.total_paid || 0)) * 100) / 100;
+    return `
+  <div class="team-row" style="cursor:pointer" data-act="view-customer" data-id="${c.id}">
     <div class="team-av">${API.esc((c.name[0] || '?').toUpperCase())}</div>
     <div class="team-main">
       <div class="nm">${API.esc(c.name)} <span class="chip ${c.type === 'retail' ? 'pending' : 'confirmed'}" style="text-transform:none">${c.type}</span></div>
-      <div class="sub">${API.esc(c.phone || '—')}${c.area ? ' · ' + API.esc(c.area) : ''} · ${V.plural(c.orders_count, 'order')}${c.discount_amount > 0 ? ` · Rs ${c.discount_amount}/bottle discount` : ''}</div>
+      <div class="sub">${API.esc(c.phone || '—')}${c.area ? ' · ' + API.esc(c.area) : ''} · ${V.plural(c.orders_count, 'order')} · spent ${API.fmtMoney(c.total_spent || 0)}${bal > 0 ? ` · <span style="color:var(--red-ink)">owes ${API.fmtMoney(bal)}</span>` : ''}${c.discount_amount > 0 ? ` · Rs ${c.discount_amount}/bottle discount` : ''}</div>
     </div>
     <div style="flex:none;text-align:right">
       <div style="font-weight:800;color:var(--green-ink)">${API.fmtMoney(c.commission_earned || 0)}</div>
       <div class="muted" style="font-size:11px;margin-top:3px">commission earned</div>
     </div>
-  </div>`).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.users}</div>No customers yet — add one from "+ New order".</div>`}`;
+  </div>`;
+  }).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.users}</div>No customers yet — add one from "+ New order".</div>`}`;
 }
 
 async function viewCommissions() {
@@ -2394,15 +2397,48 @@ async function viewCustomers() {
   const [rows, types] = await Promise.all([API.customers(), API.customerTypes()]);
   return `<div class="page-head"><h1>Customers</h1>
     ${canEdit ? '<button class="btn primary sm" data-act="add-customer">+ Add customer</button>' : ''}</div>
-    ${rows.map(c => `
-    <div class="team-row">
+    ${rows.map(c => {
+      const bal = Math.round(((c.total_spent || 0) - (c.total_paid || 0)) * 100) / 100;
+      return `
+    <div class="team-row" style="cursor:pointer" data-act="view-customer" data-id="${c.id}">
       <div class="team-av">${API.esc((c.name[0] || '?').toUpperCase())}</div>
       <div class="team-main">
         <div class="nm">${API.esc(c.name)} <span class="chip ${c.type === 'retail' ? 'pending' : 'approved'}">${c.type}</span></div>
-        <div class="sub">${API.esc(c.contact_name || c.phone || '—')}${c.address ? ' · ' + API.esc(c.address) : ''}${c.orders_count ? ' · ' + V.plural(c.orders_count, 'order') : ''}</div>
+        <div class="sub">${API.esc(c.contact_name || c.phone || '—')}${c.address ? ' · ' + API.esc(c.address) : ''}${c.orders_count ? ' · ' + V.plural(c.orders_count, 'order') : ''} · spent ${API.fmtMoney(c.total_spent || 0)}${bal > 0 ? ` · <span style="color:var(--red-ink)">owes ${API.fmtMoney(bal)}</span>` : ''}</div>
       </div>
       ${canEdit ? `<div class="team-acts"><button class="btn ghost sm" data-act="edit-customer" data-id="${c.id}">Edit</button></div>` : ''}
-    </div>`).join('')}`;
+    </div>`;
+    }).join('')}`;
+}
+
+// shared customer statement — spend/paid/balance + their order log. Reused
+// by the admin Customers list and an agent's own "My customers" list; each
+// only ever sees the orders their own role's /api/orders already scopes
+// them to, so no extra permission check needed here.
+async function modalCustomerDetail(id) {
+  const [customers, allOrders] = await Promise.all([API.customers(), API.orders()]);
+  const c = customers.find(x => x.id === id);
+  if (!c) return;
+  const orders = allOrders.filter(o => o.customer_id === id).sort((a, b) => new Date(b.placed_at) - new Date(a.placed_at));
+  const spent = c.total_spent || 0, paid = c.total_paid || 0;
+  const bal = Math.round((spent - paid) * 100) / 100;
+  openModal('Customer — ' + API.esc(c.name), `
+    <div class="modal-bd">
+      <div class="grid kpis" style="grid-template-columns:repeat(3,1fr)">
+        ${V.kpiCard('Spent', API.fmtMoney(spent), (c.orders_count || 0) + ' order(s)')}
+        ${V.kpiCard('Paid', API.fmtMoney(paid), 'received so far', 'good')}
+        ${V.kpiCard('Balance', API.fmtMoney(bal), bal > 0 ? 'still owed' : 'all settled', bal > 0 ? 'warn' : 'good')}
+      </div>
+      <div class="sec-t">Order history</div>
+      ${orders.map(o => {
+        const obal = Math.round((o.total - o.paid) * 100) / 100;
+        return `<div class="list-row" style="cursor:pointer" data-act="view-order" data-id="${o.id}">
+          <div class="grow"><div class="t">${API.esc(o.items || '—')}</div><div class="s">${API.fmtDay(o.placed_at)}${obal > 0 && o.status !== 'cancelled' ? ` · <span style="color:var(--red-ink)">owes ${API.fmtMoney(obal)}</span>` : ''}</div></div>
+          <div style="text-align:right"><div style="font-weight:700">${API.fmtMoney(o.total)}</div>${V.chip(o.status)}</div>
+        </div>`;
+      }).join('') || '<div class="empty">No orders yet</div>'}
+    </div>`,
+    `<button class="btn" data-close-modal>Close</button>`);
 }
 
 function modalEditCustomer(id) {

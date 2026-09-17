@@ -1590,13 +1590,20 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && parts[1] === 'customers') {
     requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance']);
     if (user.role === 'agent') {
-      return json(res, 200, db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=?) AS orders_count,
+      return json(res, 200, db.prepare(`SELECT c.*,
+                                        (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=? AND o.status<>'cancelled') AS orders_count,
+                                        (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=? AND o.status<>'cancelled') AS total_spent,
+                                        (SELECT COALESCE(SUM(o.paid),0) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=? AND o.status<>'cancelled') AS total_paid,
                                         (SELECT COALESCE(SUM(com.amount),0) FROM commissions com JOIN orders o2 ON o2.id=com.order_id
                                           WHERE o2.customer_id=c.id AND com.agent_id=?) AS commission_earned
                                         FROM customers c WHERE c.id IN (SELECT DISTINCT customer_id FROM orders WHERE agent_id=?)
-                                        ORDER BY c.name`).all(user.agent_id, user.agent_id, user.agent_id));
+                                        ORDER BY c.name`).all(user.agent_id, user.agent_id, user.agent_id, user.agent_id, user.agent_id));
     }
-    return json(res, 200, db.prepare('SELECT c.*, (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id) AS orders_count FROM customers c ORDER BY c.name').all());
+    return json(res, 200, db.prepare(`SELECT c.*,
+                                      (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.status<>'cancelled') AS orders_count,
+                                      (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id=c.id AND o.status<>'cancelled') AS total_spent,
+                                      (SELECT COALESCE(SUM(o.paid),0) FROM orders o WHERE o.customer_id=c.id AND o.status<>'cancelled') AS total_paid
+                                      FROM customers c ORDER BY c.name`).all());
   }
   if (method === 'POST' && parts[1] === 'customers') {
     requireRole(user, ['admin', 'manager', 'agent']);

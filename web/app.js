@@ -756,6 +756,7 @@ const App = {
       case 'adjust-stock': stop(); modalAdjustStock(+id); break;
       case 'add-customer': stop(); modalAddCustomer(); break;
       case 'edit-customer': stop(); modalEditCustomer(+id); break;
+      case 'view-customer': stop(); modalCustomerDetail(+id); break;
       case 'add-employee': stop(); modalAddEmployee(); break;
       case 'team-activate': stop();
         try { await API.updateUser(+id, { status: 'active' }); this.toast('Account activated'); this.refresh(); }

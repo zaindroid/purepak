@@ -459,6 +459,11 @@ function migrate(db) {
     const insCt = db.prepare('INSERT INTO customer_types(name) VALUES (?)');
     for (const t of ['retail', 'wholesale', 'hotel', 'restaurant', 'institutional']) insCt.run(t);
   }
+
+  // brand name is one word, "PurePak" — early product rows were seeded as
+  // "Pure Pak ..." with a space; fix any that are still stuck with the old
+  // name (harmless to re-run: no row matches once fixed)
+  db.exec(`UPDATE products SET name = 'PurePak' || substr(name, 9) WHERE name LIKE 'Pure Pak %'`);
 }
 
 function seedCatalog(db) {
@@ -467,13 +472,13 @@ function seedCatalog(db) {
   // Products — PurePak's real lineup from purepak.com.pk
   const insP = db.prepare('INSERT INTO products(name,size_ml,price,description) VALUES (?,?,?,?)');
   const products = [
-    ['Pure Pak 500 ML - Pure', 500, 10, 'Portable bottled drinking water'],
-    ['Pure Pak 500 ML - Mix', 500, 10, 'Portable bottled drinking water, mixed'],
-    ['Pure Pak 1.5 L - Pure', 1500, 20, 'Everyday bottled drinking water'],
-    ['Pure Pak 1.5 L - Mix', 1500, 20, 'Everyday bottled drinking water, mixed'],
-    ['Pure Pak 6 L', 6000, 45, 'Family-size drinking water'],
-    ['Pure Pak 12 L', 12000, 80, 'Office & home dispenser water'],
-    ['Pure Pak 19 L', 19000, 110, 'Dispenser-grade drinking water'],
+    ['PurePak 500 ML - Pure', 500, 10, 'Portable bottled drinking water'],
+    ['PurePak 500 ML - Mix', 500, 10, 'Portable bottled drinking water, mixed'],
+    ['PurePak 1.5 L - Pure', 1500, 20, 'Everyday bottled drinking water'],
+    ['PurePak 1.5 L - Mix', 1500, 20, 'Everyday bottled drinking water, mixed'],
+    ['PurePak 6 L', 6000, 45, 'Family-size drinking water'],
+    ['PurePak 12 L', 12000, 80, 'Office & home dispenser water'],
+    ['PurePak 19 L', 19000, 110, 'Dispenser-grade drinking water'],
   ];
   for (const p of products) insP.run(...p);
 }

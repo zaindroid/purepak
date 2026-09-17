@@ -219,7 +219,8 @@ async function loadOrderForm(prefill = {}, agentRates = null) {
       ? (cost != null ? `<span class="muted" style="font-size:11px">your cost ${API.fmtMoney(cost)}</span>`
         : `<span class="muted" style="font-size:11px">no set cost — ${API.user.agentCommissionPct || 0}% commission</span>`)
       : '';
-    return `<div class="field"><span class="item-line-lbl">${img ? `<img class="item-thumb" src="${img}" alt="" loading="lazy">` : ''}${API.esc(p.name)}</span>
+    const { base, variant } = splitVariant(p.name);
+    return `<div class="field"><span class="item-line-lbl">${img ? `<img class="item-thumb" src="${img}" alt="" loading="lazy">` : ''}<span>${API.esc(base)}</span>${variantChip(variant)}</span>
       <div class="row2"><input type="number" min="0" max="999" step="1" inputmode="numeric" data-itemqty="${p.id}" data-agentcost="${cost != null ? cost : ''}" value="${it.qty || 0}">
       <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / each${costHint ? '<br>' + costHint : ''}</div></div></div>
     </div>`;
@@ -1488,6 +1489,17 @@ function bottleThumb(p, fallbackIcon) {
     : fallbackIcon;
 }
 
+// "PurePak 500 ML - Pure" / "... - Mix" — same text, same weight, easy to
+// misread at a glance. Split the variant off and render it as a small
+// colored chip instead of a plain trailing word.
+function splitVariant(name) {
+  const m = /^(.*?)\s*-\s*(Pure|Mix)$/i.exec(name || '');
+  return m ? { base: m[1].trim(), variant: m[2][0].toUpperCase() + m[2].slice(1).toLowerCase() } : { base: name || '', variant: null };
+}
+function variantChip(variant) {
+  return variant ? `<span class="chip variant-${variant.toLowerCase()}">${API.esc(variant)}</span>` : '';
+}
+
 const prodEff = (p) => (typeof p.effective_price === 'number' ? p.effective_price : p.price);
 function prodPriceHtml(p) {
   const eff = prodEff(p);
@@ -1570,12 +1582,12 @@ async function viewCustomerHome() {
   const popId = (products.find(p => p.size_ml === 19000) || products.slice().sort((a, b) => b.size_ml - a.size_ml)[0] || {}).id;
   const last = orders[0];
 
-  const card = (p) => `
+  const card = (p) => { const { base, variant } = splitVariant(p.name); return `
     <article class="prod${p.id === popId ? ' is-pop' : ''}" data-pid="${p.id}" data-price="${prodEff(p)}">
       ${p.id === popId ? `<span class="prod-pop">Popular</span>` : ''}
       <div class="prod-ic">${bottleThumb(p, p.size_ml >= 6000 ? IC.bottleBig : IC.bottle)}</div>
       <div class="prod-main">
-        <div class="prod-nm">${API.esc(p.name)}</div>
+        <div class="prod-nm">${API.esc(base)}${variant ? ' ' + variantChip(variant) : ''}</div>
         <div class="prod-sz">${sizeLabel(p.size_ml)} bottle</div>
         <div class="prod-pricing">${prodPriceHtml(p)}</div>
       </div>
@@ -1587,7 +1599,7 @@ async function viewCustomerHome() {
           <button data-shop="inc" data-pid="${p.id}" aria-label="Add one">+</button>
         </div>
       </div>
-    </article>`;
+    </article>`; };
 
   return `
   <div class="shop">
@@ -2571,7 +2583,7 @@ async function viewProductionAdmin() {
   ]);
   const recentDone = recent.filter(e => e.status !== 'pending').slice(0, 15);
   const stockRow = (p) => `<tr>
-    <td class="cell-main" data-l="Product"><div class="prod-row-lbl">${bottleThumb(p, IC.bottle)}<span>${API.esc(p.name)}</span></div></td>
+    <td class="cell-main" data-l="Product"><div class="prod-row-lbl">${bottleThumb(p, IC.bottle)}<span>${API.esc(splitVariant(p.name).base)}</span>${variantChip(splitVariant(p.name).variant)}</div></td>
     ${V.m('Size', sizeLabel(p.size_ml), 'tv num')}
     ${V.m('In stock', `<b${p.stock <= 0 ? ' style="color:var(--red-ink)"' : ''}>${p.stock}</b>`, 'tv num')}
     <td class="cell-act"><button class="btn ghost sm" data-act="adjust-stock" data-id="${p.id}">Adjust</button></td>
@@ -2683,7 +2695,7 @@ async function viewProducts() {
     <div class="card" style="margin-bottom:16px"><div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>Product</th><th class="num">Size</th><th class="num">Base price</th><th>Status</th>${canEdit ? '<th></th>' : ''}</tr></thead>
       <tbody>${ps.map(p => `<tr style="${p.active ? '' : 'opacity:.55'}">
-        <td class="cell-main" data-l="Product"><div class="prod-row-lbl">${bottleThumb(p, IC.bottle)}<span>${API.esc(p.name)}${p.active ? '' : ' <span class="chip cancelled">Paused</span>'}</span></div></td>
+        <td class="cell-main" data-l="Product"><div class="prod-row-lbl">${bottleThumb(p, IC.bottle)}<span>${API.esc(splitVariant(p.name).base)}${p.active ? '' : ' <span class="chip cancelled">Paused</span>'}</span>${variantChip(splitVariant(p.name).variant)}</div></td>
         ${V.m('Size', sizeLabel(p.size_ml), 'tv num')}
         ${V.m('Price', API.fmtMoney(p.price), 'tv num')}
         ${V.m('Status', p.active ? '<span class="chip approved">Active</span>' : '<span class="chip cancelled">Off</span>', '')}
@@ -2789,7 +2801,7 @@ function modalAddProduct() {
   openModal('Add product', `
     <div class="modal-bd">
       <label class="muted">Name</label>
-      <input id="prName" class="input" style="width:100%;margin-bottom:10px" placeholder="e.g. Pure Pak 2 L">
+      <input id="prName" class="input" style="width:100%;margin-bottom:10px" placeholder="e.g. PurePak 2 L">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
         <div><label class="muted">Size (ml)</label><input id="prSize" class="input" style="width:100%" type="number" min="0" placeholder="2000"></div>
         <div><label class="muted">Base price (Rs)</label><input id="prPrice" class="input" style="width:100%" type="number" min="0" step="0.5" placeholder="25"></div>

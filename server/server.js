@@ -432,12 +432,16 @@ function newSession(user) {
 
 // ---------- auth ----------
 function userView(u) {
-  const agent = u.agent_id ? db.prepare('SELECT name FROM agents WHERE id=?').get(u.agent_id) : null;
+  const agent = u.agent_id ? db.prepare('SELECT name, commission_pct FROM agents WHERE id=?').get(u.agent_id) : null;
   const cust = u.customer_id ? db.prepare('SELECT name, type, phone, address, area, contact_name FROM customers WHERE id=?').get(u.customer_id) : null;
   return {
     id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role,
     agent_id: u.agent_id, customer_id: u.customer_id,
     agentName: agent ? agent.name : null,
+    // lets an agent estimate their own margin per line while building an
+    // order (see loadOrderForm/modalCreateOrder) without needing GET
+    // /agents, which is admin/manager/finance-only
+    agentCommissionPct: agent ? agent.commission_pct : null,
     customerName: cust ? cust.name : null,
     customerType: cust ? cust.type : null,
     customerPhone: cust ? cust.phone : null,
@@ -1635,12 +1639,19 @@ async function handleApi(req, res, url) {
     const cid = +parts[2];
     // a customer may edit ONLY their own contact details (never their pricing type)
     const ownRecord = user && user.role === 'customer' && user.customer_id === cid;
-    if (!ownRecord) requireRole(user, ['admin', 'manager', 'finance']);
+    // an agent may adjust the negotiated discount on a customer they've
+    // actually referred an order for — same scoping GET /customers already
+    // uses to decide which customers show up in their "My customers" list
+    const isAgentOwner = !ownRecord && user && user.role === 'agent' &&
+      !!db.prepare('SELECT 1 FROM orders WHERE customer_id=? AND agent_id=? LIMIT 1').get(cid, user.agent_id);
+    if (!ownRecord && !isAgentOwner) requireRole(user, ['admin', 'manager', 'finance']);
     const b = await readBody(req);
     const cur = db.prepare('SELECT * FROM customers WHERE id=?').get(cid);
     if (!cur) return err(res, 404, 'Customer not found');
     const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
-    const wantType = !ownRecord && b.type && types.includes(b.type) ? b.type : cur.type;
+    // pricing tier (customer_type) stays admin/manager/finance-only — an
+    // agent can move the discount but not reclassify retail<->wholesale
+    const wantType = !ownRecord && !isAgentOwner && b.type && types.includes(b.type) ? b.type : cur.type;
     // never settable by the customer themselves — same reasoning as their pricing type
     const wantDiscount = !ownRecord && b.discount_amount !== undefined
       ? (Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0)

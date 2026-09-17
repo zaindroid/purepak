@@ -203,16 +203,25 @@ function modalForgotPassword() {
   document.getElementById('fpEmail').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 }
 
-async function loadOrderForm(prefill = {}) {
+// agentRates: {product_id: what this agent pays for one unit}, only passed
+// for role==='agent' — shown next to the customer's price so they can see
+// their own margin *before* deciding a customer's negotiated rate, not just
+// after the fact in "My earnings"
+async function loadOrderForm(prefill = {}, agentRates = null) {
   const products = await API.products();
   const items = prefill.items || [{ product_id: products[0].id, qty: 1 }];
   return products.map((p, i) => {
     const it = items[i] || { product_id: p.id, qty: 1 };
     const unit = (typeof p.effective_price === 'number') ? p.effective_price : p.price;
     const img = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) : null);
+    const cost = agentRates ? agentRates[p.id] : undefined;
+    const costHint = agentRates
+      ? (cost != null ? `<span class="muted" style="font-size:11px">your cost ${API.fmtMoney(cost)}</span>`
+        : `<span class="muted" style="font-size:11px">no set cost — ${API.user.agentCommissionPct || 0}% commission</span>`)
+      : '';
     return `<div class="field"><span class="item-line-lbl">${img ? `<img class="item-thumb" src="${img}" alt="" loading="lazy">` : ''}${API.esc(p.name)}</span>
-      <div class="row2"><input type="number" min="0" max="999" step="1" inputmode="numeric" data-itemqty="${p.id}" value="${it.qty || 0}">
-      <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / each</div></div></div>
+      <div class="row2"><input type="number" min="0" max="999" step="1" inputmode="numeric" data-itemqty="${p.id}" data-agentcost="${cost != null ? cost : ''}" value="${it.qty || 0}">
+      <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / each${costHint ? '<br>' + costHint : ''}</div></div></div>
     </div>`;
   }).join('');
 }
@@ -251,7 +260,10 @@ async function modalCreateOrder(opts = {}) {
     const agents = await API.agents();
     agentHtml = `<div class="field"><span>Commission agent (optional)</span><select id="ocAgent"><option value="">— none —</option>${agents.map(a => `<option value="${a.id}">${API.esc(a.name)} (${a.commission_pct}%)</option>`).join('')}</select></div>`;
   }
-  const itemsHtml = await loadOrderForm();
+  const agentRates = role === 'agent'
+    ? await API.agentPrices(API.user.agent_id).then(rows => Object.fromEntries(rows.map(r => [r.product_id, r.price]))).catch(() => ({}))
+    : null;
+  const itemsHtml = await loadOrderForm({}, agentRates);
   const pay = await API.paymentMethods().catch(() => ({ methods: [], accounts: {} }));
   const payAccounts = pay.accounts || {};
   // COD + cash always; an online method only if the business has an account for it
@@ -268,7 +280,10 @@ async function modalCreateOrder(opts = {}) {
       <select id="ocMethod">${payChoices.map(m => `<option value="${m.id}">${m.label}</option>`).join('')}</select></div>
     <div id="ocPayHint" class="pay-hint"></div>
     <div class="field"><span>Note (optional)</span><input id="ocNotes" placeholder="Delivery note"></div>
-    <div id="ocTotal" class="money-lg" style="text-align:right"></div>`,
+    <div id="ocTotal" class="money-lg" style="text-align:right"></div>
+    ${role === 'agent' ? `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:2px">
+      <span class="muted" style="font-size:12px">Your earnings on this order</span>
+      <span id="ocEarn" style="font-weight:800;color:var(--green-ink)"></span></div>` : ''}`,
     `<button class="btn" data-close-modal>Cancel</button><button class="btn primary" id="ocSubmit">Place order</button>`);
   // inline "+ New customer" — lets an agent (or admin/manager) add a
   // customer without losing the items they've already picked for this order
@@ -318,14 +333,22 @@ async function modalCreateOrder(opts = {}) {
     } else { hintEl.textContent = ''; hintEl.className = 'pay-hint'; }
   }
   methodEl.addEventListener('change', payHint);
+  const earnEl = document.getElementById('ocEarn');
+  const agentPct = Number(API.user.agentCommissionPct) || 0;
   function recalc() {
-    let t = 0;
+    let t = 0, earn = 0;
     document.querySelectorAll('[data-itemqty]').forEach(inp => {
       const p = products.find(x => x.id === +inp.dataset.itemqty);
       const unit = p ? ((typeof p.effective_price === 'number') ? p.effective_price : p.price) : 0;
-      t += unit * (parseInt(inp.value) || 0);
+      const qty = parseInt(inp.value) || 0;
+      t += unit * qty;
+      if (earnEl) {
+        const cost = inp.dataset.agentcost !== '' ? Number(inp.dataset.agentcost) : null;
+        earn += cost != null ? Math.max(0, unit - cost) * qty : unit * qty * agentPct / 100;
+      }
     });
     totalEl.textContent = API.fmtMoney(t);
+    if (earnEl) earnEl.textContent = API.fmtMoney(earn);
   }
   document.querySelectorAll('[data-itemqty]').forEach(i => i.addEventListener('input', () => {
     // whole bottles only, 0-999 — a stray "-", a decimal, or a huge pasted/typed
@@ -955,6 +978,7 @@ async function viewAgentCustomers() {
       <div style="font-weight:800;color:var(--green-ink)">${API.fmtMoney(c.commission_earned || 0)}</div>
       <div class="muted" style="font-size:11px;margin-top:3px">commission earned</div>
     </div>
+    <div class="team-acts"><button class="btn ghost sm" data-act="edit-customer" data-id="${c.id}">Edit rate</button></div>
   </div>`;
   }).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.users}</div>No customers yet — add one from "+ New order".</div>`}`;
 }
@@ -2442,6 +2466,7 @@ async function modalCustomerDetail(id) {
 }
 
 function modalEditCustomer(id) {
+  const canChangeType = API.user.role !== 'agent';
   API.customers().then(rows => {
     const c = rows.find(x => x.id === id);
     if (!c) return;
@@ -2459,13 +2484,13 @@ function modalEditCustomer(id) {
           <button type="button" class="pin-btn" id="cuPinBtn" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.3"/></svg><span id="cuPinBtnLbl">${c.lat != null ? 'Location set — tap to adjust' : 'Set exact location on map'}</span></button>
           <div id="cuMap" class="geo-map" hidden></div>
           <label class="muted">Customer type (sets their pricing)</label>
-          <select id="cuType" class="input" style="width:100%;margin-bottom:4px">
+          ${canChangeType ? `<select id="cuType" class="input" style="width:100%;margin-bottom:4px">
             ${types.map(t => `<option value="${t}" ${t === c.type ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}
-          </select>
-          <p class="muted" style="font-size:11.5px;margin:8px 0 12px">New orders use the price list for this type. Blank cells in the price list fall back to the base price.</p>
-          <label class="muted">Negotiated discount (Rs off per bottle, optional)</label>
+          </select>` : `<input class="input" style="width:100%;margin-bottom:4px" value="${c.type[0].toUpperCase() + c.type.slice(1)}" disabled>`}
+          <p class="muted" style="font-size:11.5px;margin:8px 0 12px">${canChangeType ? 'New orders use the price list for this type. Blank cells in the price list fall back to the base price.' : 'Set by the office — contact them to change this customer\'s pricing tier.'}</p>
+          <label class="muted">Your negotiated rate (Rs off per bottle, optional)</label>
           <input id="cuDiscount" class="input" style="width:100%" type="number" min="0" step="1" value="${c.discount_amount ? c.discount_amount : ''}" placeholder="e.g. 5">
-          <p class="muted" style="font-size:11.5px;margin-top:6px">Applied on top of their type's price on every bottle, every order — shown to them automatically. Leave blank for no discount.</p>
+          <p class="muted" style="font-size:11.5px;margin-top:6px">Applied on top of their type's price on every bottle, every order — shown to them automatically. The gap between this and your own cost (see "New order") is what you earn. Leave blank for no discount.</p>
         </div>`,
         `<button class="btn ghost" data-close-modal>Cancel</button>
          <button class="btn primary" id="cuSave">Save</button>`);
@@ -2486,10 +2511,10 @@ function modalEditCustomer(id) {
           phone: document.getElementById('cuPhone').value.trim(),
           area: document.getElementById('cuArea').value.trim() || null,
           address: document.getElementById('cuAddress').value.trim() || null,
-          type: document.getElementById('cuType').value,
           discount_amount: Number(document.getElementById('cuDiscount').value) || 0,
           lat: cuLat, lng: cuLng,
         };
+        if (canChangeType) b.type = document.getElementById('cuType').value;
         try {
           await API.updateCustomer(id, b);
           closeModal();

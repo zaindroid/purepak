@@ -56,7 +56,12 @@ workflows:
             --scheme "$XCODE_SCHEME" \
             --export-options-plist "$(pwd)/ExportOptions.plist"
     artifacts:
-      - build/ios/ipa/*.ipa
+      # relative to the repo root, not to ios/ — the Build step cd's into
+      # ios/ first, so build-ipa's default output actually lands at
+      # ios/build/ios/ipa/*.ipa. The un-prefixed path here never matched
+      # anything, which is why publishing silently skipped with "no IPAs
+      # or PKGs found" even on an otherwise fully successful build.
+      - ios/build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
     publishing:
       app_store_connect:

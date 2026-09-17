@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  This is a PLACEHOLDER, not a real config file — the real one is generated
+  by Firebase when you add an iOS app to the purepak-6472b project (same
+  project the Android app and web Google Sign-In already use):
+
+    Firebase console -> Project settings -> Your apps -> Add app -> iOS
+    Bundle ID: com.purepak.app
+    -> download GoogleService-Info.plist
+    -> save it as PurePak/GoogleService-Info.plist (drop the ".example")
+
+  It's gitignored on purpose — every developer/CI environment drops in their
+  own copy rather than committing real client IDs to the repo. See README.md.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>REPLACE_ME.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.REPLACE_ME</string>
+	<key>API_KEY</key>
+	<string>REPLACE_ME</string>
+	<key>GCM_SENDER_ID</key>
+	<string>674062502521</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.purepak.app</string>
+	<key>PROJECT_ID</key>
+	<string>purepak-6472b</string>
+	<key>STORAGE_BUCKET</key>
+	<string>purepak-6472b.appspot.com</string>
+	<key>IS_ADS_ENABLED</key>
+	<false/>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false/>
+	<key>IS_APPINVITE_ENABLED</key>
+	<false/>
+	<key>IS_GCM_ENABLED</key>
+	<true/>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true/>
+	<key>GOOGLE_APP_ID</key>
+	<string>REPLACE_ME</string>
+</dict>
+</plist>

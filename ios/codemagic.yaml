@@ -1,0 +1,52 @@
+workflows:
+  purepak-ios-testflight:
+    name: PurePak iOS -> TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      groups:
+        # create this group in Codemagic's UI (Teams > your team > Environment
+        # variables) with the App Store Connect API key fields below — never
+        # commit the key itself
+        - appstore_credentials
+      vars:
+        BUNDLE_ID: "com.purepak.app"
+        XCODE_SCHEME: "PurePak"
+      xcode: latest
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          cd ios
+          xcodegen generate
+      - name: Set up code signing
+        script: |
+          cd ios
+          # uses the App Store Connect API key (APP_STORE_CONNECT_KEY_IDENTIFIER,
+          # APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_PRIVATE_KEY — set as
+          # Codemagic environment variables) to fetch/create signing
+          # certificates and provisioning profiles automatically
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+          keychain initialize
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Build
+        script: |
+          cd ios
+          xcode-project build-ipa \
+            --project "PurePak.xcodeproj" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # flip on once you're ready to send a build to review instead of
+        # just TestFlight testers
+        submit_to_app_store: false

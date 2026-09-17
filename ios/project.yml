@@ -1,0 +1,63 @@
+name: PurePak
+options:
+  bundleIdPrefix: com.purepak
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: 10.0.0
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 7.0.0
+
+targets:
+  PurePak:
+    type: application
+    platform: iOS
+    sources:
+      - path: PurePak
+        excludes:
+          - "GoogleService-Info.plist.example"
+    resources:
+      - path: PurePak/Assets.xcassets
+      - path: PurePak/GoogleService-Info.plist
+        optional: true
+    info:
+      path: PurePak/Info.plist
+      properties:
+        CFBundleDisplayName: PurePak
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSLocationWhenInUseUsageDescription: "PurePak uses your location to plan the fastest delivery route."
+        NSCameraUsageDescription: "PurePak uses your camera to scan and attach receipt photos."
+        NSPhotoLibraryUsageDescription: "PurePak needs access to your photos to attach a receipt image."
+        NSFaceIDUsageDescription: "Unlock PurePak with Face ID instead of typing in each time."
+    entitlements:
+      path: PurePak/PurePak.entitlements
+      properties:
+        aps-environment: development
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.purepak.app
+        PRODUCT_NAME: PurePak
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_BITCODE: false
+    dependencies:
+      - package: Firebase
+        product: FirebaseMessaging
+      - package: Firebase
+        product: FirebaseAnalytics
+      - package: GoogleSignIn
+        product: GoogleSignIn
+    postCompileScripts: []

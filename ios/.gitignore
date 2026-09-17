@@ -1,0 +1,22 @@
+# Xcode project is generated from project.yml by XcodeGen — never commit it,
+# regenerate with `xcodegen generate` instead (see README)
+*.xcodeproj/
+*.xcworkspace/
+
+# build output
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Firebase/Google config is per-environment and carries real identifiers —
+# each developer/CI drops in their own, see GoogleService-Info.plist.example
+PurePak/GoogleService-Info.plist
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store

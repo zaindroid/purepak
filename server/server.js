@@ -148,12 +148,18 @@ async function sendPush(userIds, title, body, data = {}) {
   // the right screen. Sending everything as data means our own Android
   // service always builds the notification and always gets to attach that.
   const strData = Object.fromEntries(Object.entries({ ...data, title, body }).map(([k, v]) => [k, String(v)]));
+  // iOS needs an explicit apns.payload.aps["content-available"]=1 to wake a
+  // backgrounded app for a data-only message at all — without it, FCM's
+  // default behavior on iOS is to just not deliver a data-only push while
+  // the app isn't foregrounded. Android ignores this block entirely, so it's
+  // always safe to include rather than branching on device_tokens.platform.
+  const apnsOverride = { payload: { aps: { 'content-available': 1 } } };
   for (const { token } of rows) {
     try {
       const resp = await fetch(`https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + accessToken },
-        body: JSON.stringify({ message: { token, data: strData } }),
+        body: JSON.stringify({ message: { token, data: strData, apns: apnsOverride } }),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));

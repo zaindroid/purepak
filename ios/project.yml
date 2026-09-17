@@ -9,7 +9,7 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "3"
 
 packages:
   Firebase:
@@ -35,6 +35,13 @@ targets:
       path: PurePak/Info.plist
       properties:
         CFBundleDisplayName: PurePak
+        # explicit, not relying on XcodeGen's generated-Info.plist default
+        # -- that default silently baked in a literal "1" instead of
+        # substituting these build settings, which is why bumping
+        # CURRENT_PROJECT_VERSION in this file alone didn't change the
+        # uploaded build's actual bundle version
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

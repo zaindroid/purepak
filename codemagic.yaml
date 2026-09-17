@@ -8,12 +8,13 @@ workflows:
       # was connected in Codemagic's Team settings -> Integrations
       app_store_connect: PurePak
     environment:
-      # the App Store Connect API key itself comes from the Integration you
-      # connected in Codemagic's Team settings (auth: integration, below) —
-      # not a manually-created variable group. The only env var actually
-      # needed here is GOOGLE_SERVICE_INFO_PLIST_B64 (the real
+      # the App Store Connect API key itself comes from the Integration
+      # above (auth: integration, below), not this groups list — this groups
+      # list is only for GOOGLE_SERVICE_INFO_PLIST_B64 (the real
       # GoogleService-Info.plist, base64-encoded, never committed to git),
-      # added directly on this app's "Environment variables" tab.
+      # saved under the "ios" group on this app's Environment variables tab
+      groups:
+        - ios
       vars:
         BUNDLE_ID: "com.purepak.app"
         XCODE_SCHEME: "PurePak"

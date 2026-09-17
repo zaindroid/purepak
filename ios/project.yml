@@ -45,7 +45,14 @@ targets:
     entitlements:
       path: PurePak/PurePak.entitlements
       properties:
-        aps-environment: development
+        # every build this CI pipeline produces is an App Store archive
+        # (TestFlight or App Store release) -- there's no local Xcode debug
+        # run in this workflow (no Mac available for that), so there's no
+        # "development" case to support here. A distribution provisioning
+        # profile can only pair with aps-environment: production; "development"
+        # here is exactly what caused the archive step to fail with "requires
+        # a provisioning profile with the Push Notifications feature".
+        aps-environment: production
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.purepak.app

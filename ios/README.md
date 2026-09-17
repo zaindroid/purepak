@@ -117,11 +117,6 @@ console/DOM, the same way you'd debug the web app in a desktop browser.
   image asset (see the `TODO` comment right there).
 - **`ExportOptions.plist`'s `teamID`** — needs your real Apple Developer
   Team ID before an export/archive will succeed.
-- **`aps-environment`** in `PurePak.entitlements` is set to `development`.
-  Automatic signing in Xcode/Codemagic/Actions normally handles switching
-  this to `production` for a release build on its own — if a TestFlight
-  build's push notifications silently don't arrive, this is the first thing
-  to check.
 
 ## Local regeneration (only if you get Mac access later)
 

@@ -490,6 +490,32 @@ function modalAddAgent() {
   });
 }
 
+// per-agent markup rate, product by product — leave a row blank to fall
+// back to that agent's flat commission % for that product instead
+async function modalAgentRates(agentId, agentName) {
+  const products = await API.agentPrices(agentId);
+  openModal('Rates — ' + agentName, `
+    <div class="modal-bd">
+      <p class="muted" style="font-size:12.5px;margin:0 0 12px">Set what this agent effectively pays per bottle. Their commission on that product becomes the gap between the customer's price and this rate. Leave blank to use their flat commission % instead.</p>
+      ${products.map(p => `
+        <div class="row2" style="margin-bottom:8px;align-items:center">
+          <div style="font-size:13.5px"><b>${API.esc(p.name)}</b><div class="muted" style="font-size:11.5px">${sizeLabel(p.size_ml)} · base ${API.fmtMoney(p.price)}</div></div>
+          <input class="input" data-arp="${p.id}" type="number" min="0" step="0.5" value="${p.agent_price == null ? '' : p.agent_price}" placeholder="use % instead">
+        </div>`).join('')}
+    </div>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn primary" id="arSave">Save rates</button>`);
+  document.getElementById('arSave').addEventListener('click', async () => {
+    const rows = [...document.querySelectorAll('[data-arp]')].map(inp => ({
+      product_id: +inp.dataset.arp,
+      price: inp.value === '' ? null : Number(inp.value),
+    }));
+    try {
+      await API.saveAgentPrices(agentId, rows);
+      closeModal(); toast('Rates saved', 'ok'); App.refresh();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+}
+
 // ================= ADMIN =================
 async function viewAdminDashboard() {
   const [k, monthlyRaw, top, orders, stockProducts] = await Promise.all([API.kpis(), API.monthly(), API.topCustomers(), API.orders(), API.products()]);
@@ -906,6 +932,30 @@ async function viewAgentDashboard() {
   </div>`;
 }
 
+// An agent's own book: which customers they've referred, that customer's
+// current rate/discount, and the running commission the agent has earned
+// from that customer specifically — the roster+ledger views elsewhere are
+// admin/manager/finance-facing and show every agent; this is the one-agent,
+// one-customer-list, "what have I actually earned" view.
+async function viewAgentCustomers() {
+  const customers = await API.customers();
+  return `
+  <div class="page-head"><h1>My customers</h1></div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Customers you've referred an order for. Rate and discount are set by the office; commission earned updates as their orders are placed.</p>
+  ${customers.map(c => `
+  <div class="team-row">
+    <div class="team-av">${API.esc((c.name[0] || '?').toUpperCase())}</div>
+    <div class="team-main">
+      <div class="nm">${API.esc(c.name)} <span class="chip ${c.type === 'retail' ? 'pending' : 'confirmed'}" style="text-transform:none">${c.type}</span></div>
+      <div class="sub">${API.esc(c.phone || '—')}${c.area ? ' · ' + API.esc(c.area) : ''} · ${V.plural(c.orders_count, 'order')}${c.discount_amount > 0 ? ` · Rs ${c.discount_amount}/bottle discount` : ''}</div>
+    </div>
+    <div style="flex:none;text-align:right">
+      <div style="font-weight:800;color:var(--green-ink)">${API.fmtMoney(c.commission_earned || 0)}</div>
+      <div class="muted" style="font-size:11px;margin-top:3px">commission earned</div>
+    </div>
+  </div>`).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.users}</div>No customers yet — add one from "+ New order".</div>`}`;
+}
+
 async function viewCommissions() {
   const role = API.user.role;
   const params = role === 'agent' ? {} : {};
@@ -968,6 +1018,7 @@ async function viewAgents() {
         <button class="btn sm ${a.active ? 'ghost' : 'primary'}" data-act="agent-save" data-id="${a.id}" data-pct-input="agPct${a.id}" data-target-active="${a.active ? 0 : 1}">${a.active ? 'Deactivate' : 'Activate'}</button>
       </div>` : `<div style="font-weight:800">${a.commission_pct}%</div>`}
       <div class="muted" style="font-size:11px;margin-top:3px">due ${API.fmtMoney(a.outstanding_commission)}</div>
+      ${canAdd ? `<button class="btn ghost sm" style="margin-top:6px" data-act="agent-rates" data-id="${a.id}" data-name="${API.esc(a.name)}">Set rates</button>` : ''}
     </div>
   </div>`).join('')}
   <div class="sec-t">Commission ledger</div>
@@ -2807,6 +2858,7 @@ function navFor(role) {
     agent: [
       { to: 'dashboard', icon: IC.chart, label: 'My dashboard' },
       { to: 'orders', icon: IC.box, label: 'My orders' },
+      { to: 'customers', icon: IC.users, label: 'My customers' },
       { to: 'commissions', icon: IC.cash, label: 'My commission' },
       { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
     ],
@@ -2848,7 +2900,7 @@ const VIEW = {
     products: viewProducts, backups: viewBackups,
   },
   finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents },
-  agent: { dashboard: viewAgentDashboard, orders: viewOrders, commissions: viewCommissions, receipts: viewReceipts },
+  agent: { dashboard: viewAgentDashboard, orders: viewOrders, customers: viewAgentCustomers, commissions: viewCommissions, receipts: viewReceipts },
   delivery: { route: viewSmartRoute, deliveries: viewDeliveries, receipts: viewReceipts },
   shop_manager: { orders: viewOrders, deliveries: viewDeliveries },
   employee: { profile: viewProfile, orders: viewOrders },

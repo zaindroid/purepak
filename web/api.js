@@ -66,6 +66,8 @@ const API = (() => {
     resetUserPassword: (id) => post('/users/' + id + '/reset-password', {}),
     // agents / customers / products / pricing
     updateAgent: (id, b) => patch('/agents/' + id, b),
+    agentPrices: (agentId) => g('/agent-prices' + (agentId ? '?agent_id=' + agentId : '')),
+    saveAgentPrices: (agentId, rows) => post('/agent-prices', { agent_id: agentId, rows }),
     updateCustomer: (id, b) => patch('/customers/' + id, b),
     createCustomer: (b) => post('/customers', b),
     updateProduct: (id, b) => patch('/products/' + id, b),

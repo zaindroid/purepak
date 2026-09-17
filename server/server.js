@@ -400,6 +400,27 @@ function priceForCustomer(productId, customerType, discountAmount) {
   return discount > 0 ? Math.max(0, price - discount) : price;
 }
 
+// Commission for one order referred by an agent. Per line item: if this
+// agent has a markup-style rate set for that product (agent_prices), the
+// commission is the spread between what the customer paid and that rate;
+// otherwise it falls back to the agent's flat commission_pct of what the
+// customer paid. The two can coexist product-by-product for the same
+// agent. Floored at 0 per line — a misconfigured rate above the customer's
+// price should never produce a negative commission.
+function computeAgentCommission(agentId, items, commissionPct) {
+  let amount = 0;
+  for (const it of items) {
+    const rateRow = db.prepare('SELECT price FROM agent_prices WHERE agent_id=? AND product_id=?').get(agentId, it.product_id);
+    const lineTotal = it.unit_price * it.qty;
+    if (rateRow && rateRow.price != null) {
+      amount += Math.max(0, (it.unit_price - rateRow.price)) * it.qty;
+    } else {
+      amount += lineTotal * (Number(commissionPct) || 0) / 100;
+    }
+  }
+  return Math.round(amount * 100) / 100;
+}
+
 function newSession(user) {
   const token = crypto.randomBytes(24).toString('hex');
   SESSIONS.set(token, { user, createdAt: Date.now() });
@@ -1569,9 +1590,11 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && parts[1] === 'customers') {
     requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance']);
     if (user.role === 'agent') {
-      return json(res, 200, db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=?) AS orders_count
+      return json(res, 200, db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=?) AS orders_count,
+                                        (SELECT COALESCE(SUM(com.amount),0) FROM commissions com JOIN orders o2 ON o2.id=com.order_id
+                                          WHERE o2.customer_id=c.id AND com.agent_id=?) AS commission_earned
                                         FROM customers c WHERE c.id IN (SELECT DISTINCT customer_id FROM orders WHERE agent_id=?)
-                                        ORDER BY c.name`).all(user.agent_id, user.agent_id));
+                                        ORDER BY c.name`).all(user.agent_id, user.agent_id, user.agent_id));
     }
     return json(res, 200, db.prepare('SELECT c.*, (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id) AS orders_count FROM customers c ORDER BY c.name').all());
   }
@@ -1675,6 +1698,47 @@ async function handleApi(req, res, url) {
     return json(res, 200, { updated: n });
   }
 
+  // ---- agent-specific rates (markup commission, per agent per product) ----
+  if (method === 'GET' && parts[1] === 'agent-prices') {
+    requireRole(user, ['admin', 'manager', 'finance', 'agent']);
+    const agentId = user.role === 'agent' ? user.agent_id : Number(url.searchParams.get('agent_id'));
+    if (!agentId) return err(res, 400, 'agent_id required');
+    if (user.role === 'agent' && agentId !== user.agent_id) return err(res, 403, 'Forbidden');
+    const products = db.prepare('SELECT id, name, size_ml, price FROM products WHERE active=1 ORDER BY size_ml').all();
+    const rates = db.prepare('SELECT product_id, price FROM agent_prices WHERE agent_id=?').all(agentId);
+    const byProduct = Object.fromEntries(rates.map(r => [r.product_id, r.price]));
+    return json(res, 200, products.map(p => ({ ...p, agent_price: byProduct[p.id] != null ? byProduct[p.id] : null })));
+  }
+  if (method === 'POST' && parts[1] === 'agent-prices') {
+    requireRole(user, ['admin', 'manager']);
+    const b = await readBody(req);
+    const agentId = Number(b.agent_id);
+    if (!agentId || !db.prepare('SELECT id FROM agents WHERE id=?').get(agentId)) return err(res, 400, 'agent_id invalid');
+    const rows = Array.isArray(b.rows) ? b.rows : [];
+    let n = 0;
+    for (const r of rows) {
+      const pid = Number(r.product_id), price = r.price;
+      if (!db.prepare('SELECT id FROM products WHERE id=?').get(pid)) continue;
+      if (price === null || price === '') {
+        db.prepare('DELETE FROM agent_prices WHERE agent_id=? AND product_id=?').run(agentId, pid);
+      } else {
+        const v = Number(price);
+        if (!(v >= 0)) continue;
+        db.prepare(`INSERT INTO agent_prices(agent_id,product_id,price) VALUES (?,?,?)
+                    ON CONFLICT(agent_id,product_id) DO UPDATE SET price=excluded.price`).run(agentId, pid, v);
+      }
+      n++;
+    }
+    if (n) {
+      const ag = db.prepare('SELECT name FROM agents WHERE id=?').get(agentId);
+      notify(staffUserIds().filter(x => x !== user.id), 'pricing', 'Agent rate updated',
+        n + ' rate(s) updated for ' + (ag ? ag.name : 'agent') + ' by ' + user.name + '. Applies to new orders.', 'agent#' + agentId);
+      const au = db.prepare(`SELECT id FROM users WHERE agent_id=? AND status='active'`).get(agentId);
+      if (au) sseSend(au.id, 'pricing');
+    }
+    return json(res, 200, { updated: n });
+  }
+
   // ---- orders ----
   if (method === 'GET' && parts[1] === 'orders' && parts.length === 2) {
     requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer']);
@@ -1726,6 +1790,20 @@ async function handleApi(req, res, url) {
     const orderId = r.lastInsertRowid;
     const insOI = db.prepare('INSERT INTO order_items(order_id,product_id,qty,unit_price,line_total) VALUES (?,?,?,?,?)');
     for (const row of prepared) insOI.run(orderId, ...row);
+    // an agent-referred order accrues their commission the moment it's
+    // booked; a cancellation later voids it (see the status-change handler)
+    if (agentId) {
+      const agent = db.prepare('SELECT * FROM agents WHERE id=?').get(agentId);
+      if (agent) {
+        const commItems = prepared.map(([product_id, qty, unit_price]) => ({ product_id, qty, unit_price }));
+        const commAmount = computeAgentCommission(agentId, commItems, agent.commission_pct);
+        if (commAmount > 0) {
+          db.prepare(`INSERT INTO commissions(agent_id,order_id,amount,pct,period,status) VALUES (?,?,?,?,?,'accrued')`)
+            .run(agentId, orderId, commAmount, total > 0 ? Math.round((commAmount / total) * 10000) / 100 : 0,
+              new Date().toISOString().slice(0, 7));
+        }
+      }
+    }
     // Every new order notifies the office — admin + manager + shop manager +
     // finance always, plus the assigned agent — so it lands in their feed live.
     {
@@ -1787,6 +1865,11 @@ async function handleApi(req, res, url) {
       }
       if (b.status === 'cancelled') {
         db.prepare(`UPDATE deliveries SET status='failed' WHERE order_id=? AND status IN ('pending','out_for_delivery')`).run(oid);
+        // a cancelled order never really sold, so any commission still
+        // waiting to be paid out on it is voided too. One already paid out
+        // is left alone — clawing back money that already left is a manual
+        // reconciliation call, not something to do silently.
+        db.prepare(`DELETE FROM commissions WHERE order_id=? AND status='accrued'`).run(oid);
       }
       // Notify the customer, the assigned agent, the delivery team, and staff
       {

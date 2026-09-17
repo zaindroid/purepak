@@ -701,6 +701,7 @@ const App = {
         }
         break;
       case 'new-agent': stop(); modalAddAgent(); break;
+      case 'agent-rates': stop(); modalAgentRates(+id, name); break;
       case 'new-offer': stop(); modalNewOffer(); break;
       case 'backup-run': stop(); {
         const el = e.target.closest('[data-act="backup-run"]');

@@ -154,6 +154,17 @@ function migrate(db) {
     PRIMARY KEY (product_id, customer_type)
   );
 
+  -- what this agent effectively pays for one unit of a product — set only
+  -- for products where the agent gets a markup-style rate instead of the
+  -- flat commission_pct; commission on that line then becomes
+  -- (customer's own price - this rate) rather than a percentage of it
+  CREATE TABLE IF NOT EXISTS agent_prices (
+    agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    price REAL NOT NULL,
+    PRIMARY KEY (agent_id, product_id)
+  );
+
   CREATE TABLE IF NOT EXISTS payroll (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

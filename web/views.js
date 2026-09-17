@@ -919,8 +919,8 @@ async function viewAgentDashboard() {
   <div class="grid kpis">
     ${V.kpiCard('My sales', API.fmtMoney(k.my_sales), 'all time, non-cancelled')}
     ${V.kpiCard('My orders', k.my_orders, 'all time')}
-    ${V.kpiCard('Commission due', API.fmtMoney(k.due_commission), 'accrued, not paid', 'warn')}
-    ${V.kpiCard('Commission paid', API.fmtMoney(k.paid_commission), 'lifetime payouts', 'good')}
+    ${V.kpiCard('Earnings pending', API.fmtMoney(k.due_commission), 'owed to you, not paid yet', 'warn')}
+    ${V.kpiCard('Earnings paid', API.fmtMoney(k.paid_commission), 'paid to you so far', 'good')}
   </div>
   <div class="card" style="margin-top:14px">
     <div class="card-head"><h2>Recent orders</h2><div class="spacer"></div><button class="btn sm ghost" data-act="nav" data-to="orders">All orders</button></div>
@@ -964,24 +964,24 @@ async function viewCommissions() {
   const paid = rows.filter(r => r.status === 'paid');
   const sum = (a) => a.reduce((s, r) => s + r.amount, 0);
   return `
-  <div class="page-head"><h1>Commissions</h1>
+  <div class="page-head"><h1>My earnings</h1>
     ${role === 'admin' ? '<button class="btn sm" data-act="new-agent">+ Add agent</button>' : ''}</div>
   <div class="grid kpis">
-    ${V.kpiCard('Accrued (due)', API.fmtMoney(sum(accrued)), accrued.length + ' items', 'warn')}
-    ${V.kpiCard('Paid out', API.fmtMoney(sum(paid)), paid.length + ' items', 'good')}
+    ${V.kpiCard('Pending payout', API.fmtMoney(sum(accrued)), accrued.length + ' order(s), owed to you', 'warn')}
+    ${V.kpiCard('Paid to you', API.fmtMoney(sum(paid)), paid.length + ' order(s), lifetime', 'good')}
   </div>
   <div class="card" style="margin-top:14px"><div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>Order</th><th>Customer</th><th>${role === 'agent' ? 'Agent' : 'Agent'}</th><th>Period</th><th class="num">Sales</th><th class="num">Pct</th><th class="num">Commission</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Order</th><th>Customer</th><th>${role === 'agent' ? 'Agent' : 'Agent'}</th><th>Period</th><th class="num">Sales</th><th class="num">Rate</th><th class="num">Earned</th><th>Status</th><th></th></tr></thead>
     <tbody>${rows.map(r => `
       <tr>
-      <td class="cell-main" data-l="Commission">Order #${r.order_id} <span class="muted" style="font-weight:600;font-size:12px">· ${r.period || '—'}</span></td>
+      <td class="cell-main" data-l="Order">Order #${r.order_id} <span class="muted" style="font-weight:600;font-size:12px">· ${r.period || '—'}</span></td>
       ${V.m('Customer', API.esc(r.customer || '—'))}
       ${V.m('Agent', API.esc(r.agent_name || '—'))}
       ${V.m('Sales', API.fmtMoney(r.order_total), 'tv num')}
       ${V.m('Rate', r.pct + '%', 'tv num')}
-      ${V.m('Commission', `<b>${API.fmtMoney(r.amount)}</b>`, 'tv num')}
+      ${V.m('Earned', `<b>${API.fmtMoney(r.amount)}</b>`, 'tv num')}
       ${V.m('Status', V.chip(r.status), 'tv')}
-      <td class="cell-act">${r.status === 'accrued' && (role === 'admin' || role === 'finance') ? `<button class="btn sm primary" data-act="settle-commission" data-id="${r.id}">Mark paid</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="9"><div class="empty"><div class="em-ico">${IC.cash}</div>No commissions yet</div></td></tr>`}
+      <td class="cell-act">${r.status === 'accrued' && (role === 'admin' || role === 'finance') ? `<button class="btn sm primary" data-act="settle-commission" data-id="${r.id}">Mark paid</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="9"><div class="empty"><div class="em-ico">${IC.cash}</div>Nothing earned yet</div></td></tr>`}
     </tbody></table></div></div>`;
 }
 
@@ -2859,7 +2859,7 @@ function navFor(role) {
       { to: 'dashboard', icon: IC.chart, label: 'My dashboard' },
       { to: 'orders', icon: IC.box, label: 'My orders' },
       { to: 'customers', icon: IC.users, label: 'My customers' },
-      { to: 'commissions', icon: IC.cash, label: 'My commission' },
+      { to: 'commissions', icon: IC.cash, label: 'My earnings' },
       { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
     ],
     delivery: [

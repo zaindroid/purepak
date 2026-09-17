@@ -317,6 +317,25 @@ function migrate(db) {
     created_by TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- every one of these backs a WHERE/JOIN that runs on nearly every
+  -- request (order lists, customer statements, commission ledgers,
+  -- delivery boards) and had no index at all until now — harmless on
+  -- today's small tables, but exactly the kind of gap that turns into a
+  -- silent full-table-scan slowdown once order history grows into the
+  -- thousands. IF NOT EXISTS makes this safe to run on every boot.
+  CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_orders_agent ON orders(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+  CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+  CREATE INDEX IF NOT EXISTS idx_order_items_product ON order_items(product_id);
+  CREATE INDEX IF NOT EXISTS idx_deliveries_order ON deliveries(order_id);
+  CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status);
+  CREATE INDEX IF NOT EXISTS idx_commissions_agent ON commissions(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_commissions_order ON commissions(order_id);
+  CREATE INDEX IF NOT EXISTS idx_commissions_status ON commissions(status);
+  CREATE INDEX IF NOT EXISTS idx_ledger_at ON ledger(at);
+  CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(status);
   `);
   // light migrations for existing databases
   const cols = db.prepare(`PRAGMA table_info(customers)`).all().map(c => c.name);

@@ -388,10 +388,13 @@ function httpError(code, msg) { const e = new Error(msg); e.code = code; return 
 
 // price for a product given the customer's type (matrix override falls back to base
 // price), then a flat negotiated per-bottle discount on top, if this particular
-// customer has one — never below 0 regardless of how large the discount is
-function priceForCustomer(productId, customerType, discountAmount) {
-  const base = db.prepare('SELECT price FROM products WHERE id=?').get(productId)?.price;
-  let price = base;
+// customer has one — never below 0 regardless of how large the discount is.
+// Takes the base price directly rather than a product id — every call site
+// already has the product row in hand (it just validated the id exists), so
+// re-querying products here was a pure-waste extra round trip on every line
+// item of every order.
+function priceForCustomer(basePrice, productId, customerType, discountAmount) {
+  let price = basePrice;
   if (customerType) {
     const row = db.prepare('SELECT price FROM product_prices WHERE product_id=? AND customer_type=?').get(productId, customerType);
     if (row && row.price != null) price = row.price;
@@ -1258,7 +1261,7 @@ async function handleApi(req, res, url) {
       const p = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(it.product_id);
       if (!p) return err(res, 400, 'Unknown product');
       const qty = Math.max(1, Math.min(50, Math.round(Number(it.qty) || 1)));
-      const price = priceForCustomer(p.id, custType, custDiscount);
+      const price = priceForCustomer(p.price, p.id, custType, custDiscount);
       total += qty * price;
       prepared.push([p.id, qty, price, qty * price]);
     }
@@ -1475,17 +1478,24 @@ async function handleApi(req, res, url) {
       ? db.prepare('SELECT * FROM products').all()
       : db.prepare('SELECT * FROM products WHERE active=1').all();
     const callerCust = user && user.customer_id ? db.prepare('SELECT type, discount_amount FROM customers WHERE id=?').get(user.customer_id) : null;
+    // batched once for the whole response instead of per product-per-type —
+    // this endpoint is the single hottest one in the app (every shop load,
+    // every order form), and the old per-row queries turned a 7-product
+    // catalog into ~55+ queries on every hit
+    const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
+    const priceMap = {}; // product_id -> { customer_type: price }
+    for (const r of db.prepare('SELECT product_id, customer_type, price FROM product_prices').all())
+      (priceMap[r.product_id] = priceMap[r.product_id] || {})[r.customer_type] = r.price;
     const out = rows.map(p => {
       const o = { ...p };
+      const overrides = priceMap[p.id] || {};
       // per-type overrides (already nested by the pricing matrix)
-      o.prices = {};
-      for (const t of (db.prepare('SELECT name FROM customer_types').all().map(r => r.name))) {
-        const r = db.prepare('SELECT price FROM product_prices WHERE product_id=? AND customer_type=?').get(p.id, t);
-        o.prices[t] = (r && r.price != null) ? r.price : null;
-      }
+      o.prices = Object.fromEntries(types.map(t => [t, overrides[t] != null ? overrides[t] : null]));
       // effective price the caller actually pays (their type + any negotiated
       // per-bottle discount; base price for staff, who aren't a customer)
-      o.effective_price = priceForCustomer(p.id, callerCust ? callerCust.type : null, callerCust ? callerCust.discount_amount : 0);
+      const tierPrice = (callerCust && callerCust.type && overrides[callerCust.type] != null) ? overrides[callerCust.type] : p.price;
+      const discount = callerCust ? Number(callerCust.discount_amount) || 0 : 0;
+      o.effective_price = discount > 0 ? Math.max(0, tierPrice - discount) : tierPrice;
       return o;
     });
     return json(res, 200, out);
@@ -1783,7 +1793,7 @@ async function handleApi(req, res, url) {
       const qty = Math.max(1, Math.min(999, Math.round(Number(it.qty) || 1)));
       // price per the customer's type (matrix override) then their own
       // negotiated per-bottle discount on top, else base price
-      const price = priceForCustomer(p.id, cust.type, cust.discount_amount);
+      const price = priceForCustomer(p.price, p.id, cust.type, cust.discount_amount);
       total += qty * price;
       return [p.id, qty, price, qty * price];
     });

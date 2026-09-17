@@ -38,6 +38,14 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        # iPad is expected to support rotation even for portrait-primary
+        # apps -- Apple's App Review guidelines flag iPad apps that only
+        # declare one orientation
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSLocationWhenInUseUsageDescription: "PurePak uses your location to plan the fastest delivery route."
         NSCameraUsageDescription: "PurePak uses your camera to scan and attach receipt photos."
         NSPhotoLibraryUsageDescription: "PurePak needs access to your photos to attach a receipt image."
@@ -57,7 +65,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.purepak.app
         PRODUCT_NAME: PurePak
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         # manual, not Automatic: CI has no interactive Xcode session to
         # resolve automatic signing, and automatic signing was also the
         # thing silently reusing a stale/managed profile that lacked the

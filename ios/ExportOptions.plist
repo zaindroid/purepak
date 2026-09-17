@@ -5,12 +5,14 @@
 	<key>method</key>
 	<string>app-store-connect</string>
 	<key>teamID</key>
-	<!-- replace with your Apple Developer Team ID (App Store Connect ->
-	     Membership details), or set via -exportOptionsPlist substitution
-	     if you'd rather keep it out of git -->
-	<string>REPLACE_WITH_TEAM_ID</string>
+	<string>88VWT2K3LJ</string>
 	<key>signingStyle</key>
-	<string>automatic</string>
+	<string>manual</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.purepak.app</key>
+		<string>PurePak App Store</string>
+	</dict>
 	<key>uploadSymbols</key>
 	<true/>
 </dict>

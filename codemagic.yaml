@@ -53,7 +53,8 @@ workflows:
           cd ios
           xcode-project build-ipa \
             --project "PurePak.xcodeproj" \
-            --scheme "$XCODE_SCHEME"
+            --scheme "$XCODE_SCHEME" \
+            --export-options-plist "$(pwd)/ExportOptions.plist"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log

@@ -109,9 +109,6 @@ console/DOM, the same way you'd debug the web app in a desktop browser.
 
 ## What's still a placeholder
 
-- **App icon** — `Assets.xcassets/AppIcon.appiconset` declares the slot but
-  has no image yet. Drop a 1024×1024 PNG in and reference it in that
-  asset's `Contents.json`.
 - **Splash logo** — `ContentView.swift`'s `SplashView` uses an SF Symbol
   (`drop.fill`) as a stand-in; swap for the real logo once you add it as an
   image asset (see the `TODO` comment right there).

@@ -4,13 +4,12 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
-      groups:
-        # create this group in Codemagic's UI (Teams > your team > Environment
-        # variables) with the App Store Connect API key fields below, plus
-        # GOOGLE_SERVICE_INFO_PLIST_B64 (the real GoogleService-Info.plist,
-        # base64-encoded — never committed to git, same as how the Android
-        # app keeps google-services.json out of the repo)
-        - appstore_credentials
+      # the App Store Connect API key itself comes from the Integration you
+      # connected in Codemagic's Team settings (auth: integration, below) —
+      # not a manually-created variable group. The only env var actually
+      # needed here is GOOGLE_SERVICE_INFO_PLIST_B64 (the real
+      # GoogleService-Info.plist, base64-encoded, never committed to git),
+      # added directly on this app's "Environment variables" tab.
       vars:
         BUNDLE_ID: "com.purepak.app"
         XCODE_SCHEME: "PurePak"

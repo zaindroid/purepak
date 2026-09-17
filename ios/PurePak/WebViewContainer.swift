@@ -137,6 +137,10 @@ struct WebViewContainer: UIViewRepresentable {
         }
 
         // ---- <input type="file"> (receipt scanner camera/photo picker) ----
+        // WKUIDelegate only gained this callback on iOS in 18.4 (it was
+        // macOS/Catalyst-only before) — deployment target here is 15.0, so
+        // this stays unimplemented pre-18.4, same as before Apple added it.
+        @available(iOS 18.4, *)
         func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                      initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
             model.presentFilePicker(completion: completionHandler)

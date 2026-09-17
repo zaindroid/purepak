@@ -3,6 +3,10 @@ workflows:
     name: PurePak iOS -> TestFlight
     max_build_duration: 60
     instance_type: mac_mini_m2
+    integrations:
+      # must match the exact name given to the App Store Connect key when it
+      # was connected in Codemagic's Team settings -> Integrations
+      app_store_connect: PurePak
     environment:
       # the App Store Connect API key itself comes from the Integration you
       # connected in Codemagic's Team settings (auth: integration, below) —

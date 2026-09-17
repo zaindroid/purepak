@@ -58,7 +58,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.purepak.app
         PRODUCT_NAME: PurePak
         TARGETED_DEVICE_FAMILY: "1"
-        CODE_SIGN_STYLE: Automatic
+        # manual, not Automatic: CI has no interactive Xcode session to
+        # resolve automatic signing, and automatic signing was also the
+        # thing silently reusing a stale/managed profile that lacked the
+        # Push Notifications entitlement. This pins the exact cert/profile
+        # created for this app instead.
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: 88VWT2K3LJ
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "PurePak App Store"
         ENABLE_BITCODE: false
     dependencies:
       - package: Firebase

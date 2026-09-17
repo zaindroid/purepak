@@ -4,15 +4,25 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
     integrations:
-      # must match the exact name given to the App Store Connect key when it
-      # was connected in Codemagic's Team settings -> Integrations
+      # still used for the TestFlight upload step at the bottom (auth:
+      # integration, publishing.app_store_connect) — that only needs
+      # App Manager-level access, unlike creating certs/profiles, so this
+      # integration is kept even though signing itself no longer goes
+      # through it (see "Set up code signing" below)
       app_store_connect: PurePak
     environment:
-      # the App Store Connect API key itself comes from the Integration
-      # above (auth: integration, below), not this groups list — this groups
-      # list is only for GOOGLE_SERVICE_INFO_PLIST_B64 (the real
-      # GoogleService-Info.plist, base64-encoded, never committed to git),
-      # saved under the "ios" group on this app's Environment variables tab
+      # GOOGLE_SERVICE_INFO_PLIST_B64, IOS_CERTIFICATE_P12_B64,
+      # IOS_CERTIFICATE_PASSWORD, IOS_PROVISIONING_PROFILE_B64 — all real
+      # credentials, never committed to git, saved under the "ios" group on
+      # this app's Environment variables tab.
+      #
+      # The cert/profile pair is a manually-created "Apple Distribution"
+      # cert + "PurePak App Store" provisioning profile, not Codemagic's
+      # automatic fetch-signing-files flow — that flow kept reusing/creating
+      # a profile that Xcode rejected with "requires a provisioning profile
+      # with the Push Notifications feature" even after confirming the App
+      # ID capability and API key role were both correct. Manual signing
+      # sidesteps whatever was going wrong there.
       groups:
         - ios
       vars:
@@ -32,17 +42,12 @@ workflows:
           xcodegen generate
       - name: Set up code signing
         script: |
-          cd ios
-          # uses the App Store Connect API key (APP_STORE_CONNECT_KEY_IDENTIFIER,
-          # APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_PRIVATE_KEY — set as
-          # Codemagic environment variables) to fetch/create signing
-          # certificates and provisioning profiles automatically
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --create
+          echo "$IOS_CERTIFICATE_P12_B64" | base64 --decode > /tmp/distribution.p12
+          echo "$IOS_PROVISIONING_PROFILE_B64" | base64 --decode > /tmp/PurePak_App_Store.mobileprovision
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp /tmp/PurePak_App_Store.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/"
           keychain initialize
-          keychain add-certificates
-          xcode-project use-profiles
+          keychain add-certificates --certificate /tmp/distribution.p12 --certificate-password "$IOS_CERTIFICATE_PASSWORD"
       - name: Build
         script: |
           cd ios

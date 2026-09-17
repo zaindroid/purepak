@@ -19,6 +19,14 @@ PurePak/GoogleService-Info.plist
 # into git or CI
 *.p8
 
+# Distribution certificate CSR/private key and any exported signing
+# certs/profiles — real credentials, never committed
+certs/
+*.certSigningRequest
+*.cer
+*.p12
+*.mobileprovision
+
 # Swift Package Manager
 .build/
 .swiftpm/

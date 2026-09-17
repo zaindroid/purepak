@@ -14,6 +14,11 @@ DerivedData/
 # each developer/CI drops in their own, see GoogleService-Info.plist.example
 PurePak/GoogleService-Info.plist
 
+# APNs auth key (real private key, downloadable exactly once from Apple) —
+# this only ever goes to Firebase Console (Cloud Messaging config), never
+# into git or CI
+*.p8
+
 # Swift Package Manager
 .build/
 .swiftpm/

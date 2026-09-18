@@ -684,11 +684,13 @@ body.has-cartbar .shop{padding-bottom:150px}
 }
 .prod-ic{
   width:100%;height:112px;flex:none;border-radius:10px;display:grid;place-items:center;
-  /* fully blue-tinted, no pure-white stop — the bottle photos are cut out
-     to transparent (see web/img/bottle-*.png) so a plain white background
-     here would read as the same flat white box we just removed the images
-     from; this keeps a soft, on-brand "floating in water" halo instead */
-  background:radial-gradient(circle at 50% 32%,var(--blue-100) 0%,var(--blue-50) 78%);color:var(--blue-700);margin-bottom:10px;
+  /* plain white, matching .prod's own card background exactly — a pale
+     blue tint here still reads as an off-white/gray box against the
+     white card on a real screen, which is the same "box" look this was
+     meant to fix. Flush with the card is the one option guaranteed not
+     to look like a mismatched box, regardless of how clean the photo's
+     own cutout edges are. */
+  background:var(--card);color:var(--blue-700);margin-bottom:10px;
   overflow:hidden;
 }
 .prod-ic svg{width:30px;height:30px}

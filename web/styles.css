@@ -382,6 +382,13 @@ table.matrix .base{color:var(--ink-3);font-size:11px}
 /* login */
 .login{min-height:calc(100dvh - 52px);display:flex;align-items:flex-start;justify-content:center;padding:26px 16px;background:radial-gradient(900px 400px at 50% -80px,var(--blue-100),transparent),var(--bg)}
 .login-card{width:100%;max-width:400px;background:#fff;border:1px solid var(--line-2);border-radius:20px;box-shadow:var(--shadow);padding:26px 22px}
+/* tablet+: a 400px card top-aligned on a tall iPad viewport reads as "a
+   phone card stranded in a mostly empty page" — center it in the
+   available height instead and let it grow a bit wider */
+@media (min-width:700px){
+  .login{align-items:center;min-height:100dvh}
+  .login-card{max-width:460px;padding:34px 30px}
+}
 .login-brand{text-align:center;margin-bottom:4px}
 .login-title{font-size:26px;font-weight:800;text-align:center;letter-spacing:-.5px;color:var(--blue-900);margin:8px 0 0}
 .login-sub{text-align:center;color:var(--ink-3);font-size:13.5px;margin:2px 0 18px}

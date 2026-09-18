@@ -14,6 +14,10 @@
   --grad-water:linear-gradient(135deg,#1976d2 0%,#2196f3 45%,#22b07d 130%);
   --grad-water-soft:linear-gradient(135deg,#e3f0fd 0%,#eafaf3 100%);
   --grad-ink:linear-gradient(135deg,var(--blue-800),#0a4d8c 55%,#0e7a5f 140%);
+  /* warm, deliberately NOT blue/teal like the rest of the app — this is
+     the one thing that should visually shout "deal" against a UI that's
+     otherwise all water tones, used only for the offer banner */
+  --grad-celebrate:linear-gradient(135deg,#ff7a3d 0%,#ff3d81 55%,#c026d3 130%);
   --ease:cubic-bezier(.22,.61,.36,1);
   --font:'Inter',-apple-system,system-ui,'Segoe UI',Roboto,sans-serif;
 }
@@ -459,6 +463,7 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
   .card,.tbl tbody tr,.bar{animation-duration:.01s!important}
   .offer-card{animation:none}
   .offer-card::after{display:none}
+  .offer-ic{animation:none}
 }
 
 /* cards: staggered entrance + hover lift (desktop) */
@@ -626,23 +631,30 @@ body.has-cartbar .shop{padding-bottom:150px}
 .offer-card{
   position:relative;overflow:hidden;cursor:pointer;
   display:flex;align-items:flex-start;gap:10px;
-  background:var(--grad-water);border:1px solid transparent;border-radius:12px;padding:12px 14px;
-  box-shadow:0 4px 16px rgba(25,118,210,.25);
+  /* deliberately warm/celebratory — everything else in this app is blue
+     or teal, so this is the one card that's allowed to look like a
+     party invite instead of a water brand */
+  background:var(--grad-celebrate);border:1px solid transparent;border-radius:12px;padding:12px 14px;
+  box-shadow:0 4px 18px rgba(219,40,116,.32);
   transition:transform .15s var(--ease),box-shadow .15s var(--ease);
-  animation:rowIn .4s var(--ease) backwards,offerGlow 2.6s ease-in-out infinite;
+  animation:offerPop .5s var(--ease) backwards,offerGlow 2.2s ease-in-out infinite;
 }
-.offer-card:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(25,118,210,.32)}
+.offer-card:hover{transform:translateY(-1px) scale(1.01);box-shadow:0 6px 22px rgba(219,40,116,.4)}
 .offer-card:active{transform:translateY(0) scale(.99)}
 .offer-card:focus-visible{outline:2px solid #fff;outline-offset:2px}
-/* attention-getting shimmer sweep — a subtle diagonal highlight passing
-   through the card every few seconds, not a constant distraction */
+@keyframes offerPop{0%{opacity:0;transform:scale(.9) translateY(6px)}70%{opacity:1;transform:scale(1.02) translateY(0)}100%{transform:scale(1)}}
+/* attention-getting shimmer sweep — a bright diagonal highlight passing
+   through the card every couple seconds, not a constant distraction */
 .offer-card::after{
   content:"";position:absolute;inset:0;pointer-events:none;
-  background:linear-gradient(115deg,transparent 20%,rgba(255,255,255,.35) 40%,transparent 60%);
-  transform:translateX(-120%);animation:offerShimmer 3.2s ease-in-out infinite;
+  background:linear-gradient(115deg,transparent 20%,rgba(255,255,255,.45) 40%,transparent 60%);
+  transform:translateX(-120%);animation:offerShimmer 2.6s ease-in-out infinite;
 }
-@keyframes offerShimmer{0%,45%{transform:translateX(-120%)}65%,100%{transform:translateX(120%)}}
-@keyframes offerGlow{0%,100%{box-shadow:0 4px 16px rgba(25,118,210,.25)}50%{box-shadow:0 4px 22px rgba(34,176,125,.35)}}
+@keyframes offerShimmer{0%,40%{transform:translateX(-120%)}60%,100%{transform:translateX(120%)}}
+@keyframes offerGlow{0%,100%{box-shadow:0 4px 18px rgba(219,40,116,.32)}50%{box-shadow:0 4px 26px rgba(192,38,211,.42)}}
+/* the megaphone gets a little wiggle of its own — reads as "ding!" */
+.offer-ic{animation:offerRing 2.2s ease-in-out infinite}
+@keyframes offerRing{0%,80%,100%{transform:rotate(0)}83%{transform:rotate(-12deg)}86%{transform:rotate(10deg)}89%{transform:rotate(-8deg)}92%{transform:rotate(5deg)}95%{transform:rotate(0)}}
 .offer-ic{flex:none;width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.22);color:#fff;display:grid;place-items:center}
 .offer-txt{flex:1;min-width:0;font-size:12.5px;color:#fff;line-height:1.4}
 .offer-txt b{display:block;font-size:13.5px;font-weight:800;margin-bottom:2px}

@@ -695,7 +695,12 @@ body.has-cartbar .shop{padding-bottom:150px}
   text-transform:uppercase;padding:3px 9px;border-radius:0 14px 0 10px;
 }
 .prod-ic{
-  width:100%;height:112px;flex:none;border-radius:10px;display:grid;place-items:center;
+  /* height tied to the card's own width (aspect-ratio) rather than a
+     fixed px value — cards get much wider on tablet/desktop (3-up vs
+     2-up, and no cap beyond that on a wide window), and a fixed-height
+     image box just left a small photo floating in a large empty card.
+     This scales the photo up right along with the card at every size. */
+  width:100%;aspect-ratio:3/2;flex:none;border-radius:10px;display:grid;place-items:center;
   /* plain white, matching .prod's own card background exactly — a pale
      blue tint here still reads as an off-white/gray box against the
      white card on a real screen, which is the same "box" look this was
@@ -706,7 +711,7 @@ body.has-cartbar .shop{padding-bottom:150px}
   overflow:hidden;
 }
 .prod-ic svg{width:30px;height:30px}
-.prod-ic img{width:auto;height:auto;max-width:92%;max-height:98px;object-fit:contain;display:block}
+.prod-ic img{width:auto;height:88%;max-width:92%;object-fit:contain;display:block}
 .prod-main{display:flex;flex-direction:column;flex:1 1 auto} /* grows so CTA sits flush at the bottom */
 .prod-nm{font-weight:700;font-size:13px;line-height:1.3;letter-spacing:-.01em}
 .prod-sz{font-size:11px;color:var(--ink-3);margin-top:1px}

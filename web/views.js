@@ -213,7 +213,7 @@ async function loadOrderForm(prefill = {}, agentRates = null) {
   return products.map((p, i) => {
     const it = items[i] || { product_id: p.id, qty: 1 };
     const unit = (typeof p.effective_price === 'number') ? p.effective_price : p.price;
-    const img = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) : null);
+    const img = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) + '?v=' + BOTTLE_IMG_VER : null);
     const cost = agentRates ? agentRates[p.id] : undefined;
     const costHint = agentRates
       ? (cost != null ? `<span class="muted" style="font-size:11px">your cost ${API.fmtMoney(cost)}</span>`
@@ -1479,11 +1479,20 @@ const sizeLabel = (ml) => ml >= 1000
 // real bottle photography, keyed by size — falls back to an icon (IC.bottle*)
 // wherever a product's size doesn't match one of our stocked shots
 const BOTTLE_IMG = { 500: 'bottle-500ml.png', 1500: 'bottle-1.5l.png', 6000: 'bottle-6l.png', 12000: 'bottle-12l.png', 19000: 'bottle-19l.png' };
+// bump whenever these bundled files themselves change (not product data) —
+// /img/* is served with a 24h public cache and, unlike styles.css/views.js/
+// app.js, has no cache-busting of its own, so replacing bottle-19l.png's
+// pixels (cutting its background to transparent) in place didn't do
+// anything for anyone whose CDN edge or browser had already cached the old
+// opaque version at that same URL. A version query string forces a fresh
+// fetch by making it a different URL, same trick withAssetVer already does
+// server-side for the JS/CSS.
+const BOTTLE_IMG_VER = 2;
 const bottleImg = (ml) => BOTTLE_IMG[ml] || null;
 // prefer an admin-uploaded photo (p.image_url, an absolute server path) over
 // the bundled stock bottle shot, and fall back to an icon if neither exists
 function bottleThumb(p, fallbackIcon) {
-  const src = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) : null);
+  const src = p.image_url || (bottleImg(p.size_ml) ? 'img/' + bottleImg(p.size_ml) + '?v=' + BOTTLE_IMG_VER : null);
   return src
     ? `<img src="${src}" alt="${API.esc(p.name)}" loading="lazy">`
     : fallbackIcon;

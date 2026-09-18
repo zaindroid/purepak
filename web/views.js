@@ -1543,11 +1543,18 @@ function offerBannerHtml(offers) {
   const visible = offers.filter(o => !dismissed.has(o.id));
   if (!visible.length) return '';
   return `<section class="offer-banner" id="offerBanner">${visible.map(o => `
-    <div class="offer-card" data-offer-id="${o.id}">
+    <div class="offer-card" data-offer-id="${o.id}" role="button" tabindex="0">
       <div class="offer-ic">${IC.megaphone}</div>
       <div class="offer-txt"><b>${API.esc(o.title)}</b><span>${API.esc(o.body)}</span></div>
       <button class="offer-close" data-offer-dismiss="${o.id}" aria-label="Dismiss">&times;</button>
     </div>`).join('')}</section>`;
+}
+function modalOfferDetail(offers, id) {
+  const o = offers.find(x => x.id === id);
+  if (!o) return;
+  openModal(API.esc(o.title), `
+    <div class="modal-bd"><p style="font-size:14.5px;line-height:1.6;margin:0">${API.esc(o.body)}</p></div>`,
+    `<button class="btn primary" data-close-modal>Got it</button>`);
 }
 function dismissOffer(id) {
   try {
@@ -1781,7 +1788,18 @@ function initCustomerHome() {
   document.getElementById('view').addEventListener('click', onShopClick);
   document.getElementById('view').addEventListener('click', (e) => {
     const b = e.target.closest('[data-offer-dismiss]');
-    if (b) dismissOffer(+b.dataset.offerDismiss);
+    if (b) return dismissOffer(+b.dataset.offerDismiss);
+    const card = e.target.closest('.offer-card');
+    if (card) API.activeOffers().then(offers => modalOfferDetail(offers, +card.dataset.offerId)).catch(() => {});
+  });
+  // Enter/Space activates a focused offer card, same as clicking it — the
+  // card is role="button" so keyboard users need this, not just a mouse
+  document.getElementById('view').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const card = e.target.closest('.offer-card');
+    if (!card) return;
+    e.preventDefault();
+    API.activeOffers().then(offers => modalOfferDetail(offers, +card.dataset.offerId)).catch(() => {});
   });
 }
 

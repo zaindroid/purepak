@@ -964,8 +964,8 @@ async function viewAgentDashboard() {
 async function viewAgentCustomers() {
   const customers = await API.customers();
   return `
-  <div class="page-head"><h1>My customers</h1></div>
-  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Customers you've referred an order for. Rate and discount are set by the office; commission earned updates as their orders are placed.</p>
+  <div class="page-head"><h1>My customers</h1><button class="btn primary sm" data-act="add-customer">+ Add customer</button></div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Customers you've referred an order for. Set their negotiated rate with "Edit rate" below — commission earned updates as their orders are placed.</p>
   ${customers.map(c => {
     const bal = Math.round(((c.total_spent || 0) - (c.total_paid || 0)) * 100) / 100;
     return `
@@ -981,7 +981,7 @@ async function viewAgentCustomers() {
     </div>
     <div class="team-acts"><button class="btn ghost sm" data-act="edit-customer" data-id="${c.id}">Edit rate</button></div>
   </div>`;
-  }).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.users}</div>No customers yet — add one from "+ New order".</div>`}`;
+  }).join('') || `<div class="card card-pad empty"><div class="em-ico">${IC.users}</div>No customers yet — add one with "+ Add customer" above.</div>`}`;
 }
 
 async function viewCommissions() {
@@ -2552,6 +2552,10 @@ function modalAddCustomer() {
         <select id="ncType" class="input" style="width:100%;margin-bottom:4px">
           ${types.map(t => `<option value="${t}">${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}
         </select>
+        ${API.user.role === 'agent' ? `<p class="muted" style="font-size:11.5px;margin:8px 0 12px">New orders use the price list for this type. Blank cells in the price list fall back to the base price.</p>
+        <label class="muted">Your negotiated rate (Rs off per bottle, optional)</label>
+        <input id="ncDiscount" class="input" style="width:100%" type="number" min="0" step="1" placeholder="e.g. 5">
+        <p class="muted" style="font-size:11.5px;margin-top:6px">Applied on top of their type's price on every bottle, every order. The gap between this and your own cost (see "New order") is what you earn. Leave blank for no discount.</p>` : ''}
       </div>`,
       `<button class="btn ghost" data-close-modal>Cancel</button>
        <button class="btn primary" id="ncSubmit">Add customer</button>`);
@@ -2562,6 +2566,8 @@ function modalAddCustomer() {
         area: document.getElementById('ncArea').value.trim() || null,
         type: document.getElementById('ncType').value,
       };
+      const discEl = document.getElementById('ncDiscount');
+      if (discEl) b.discount_amount = Number(discEl.value) || 0;
       if (!b.name || !b.phone) { toast('Name and phone are required', 'warn'); return; }
       try {
         await API.createCustomer(b);

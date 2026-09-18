@@ -1610,8 +1610,8 @@ async function handleApi(req, res, url) {
                                         (SELECT COALESCE(SUM(o.paid),0) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=? AND o.status<>'cancelled') AS total_paid,
                                         (SELECT COALESCE(SUM(com.amount),0) FROM commissions com JOIN orders o2 ON o2.id=com.order_id
                                           WHERE o2.customer_id=c.id AND com.agent_id=?) AS commission_earned
-                                        FROM customers c WHERE c.id IN (SELECT DISTINCT customer_id FROM orders WHERE agent_id=?)
-                                        ORDER BY c.name`).all(user.agent_id, user.agent_id, user.agent_id, user.agent_id, user.agent_id));
+                                        FROM customers c WHERE c.agent_id=? OR c.id IN (SELECT DISTINCT customer_id FROM orders WHERE agent_id=?)
+                                        ORDER BY c.name`).all(user.agent_id, user.agent_id, user.agent_id, user.agent_id, user.agent_id, user.agent_id));
     }
     return json(res, 200, db.prepare(`SELECT c.*,
                                       (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.status<>'cancelled') AS orders_count,
@@ -1629,9 +1629,13 @@ async function handleApi(req, res, url) {
     const hasLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
       Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
     const discountAmount = Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0;
-    const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type,lat,lng,discount_amount) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    // an agent-created customer is theirs from the start — shows up in
+    // "My customers" and is editable by them immediately, not just after
+    // their first order (see GET /customers and PATCH /customers below)
+    const ownerAgentId = user.role === 'agent' ? user.agent_id : null;
+    const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type,lat,lng,discount_amount,agent_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
       .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type,
-        hasLatLng ? cLat : null, hasLatLng ? cLng : null, discountAmount);
+        hasLatLng ? cLat : null, hasLatLng ? cLng : null, discountAmount, ownerAgentId);
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
     return json(res, 201, db.prepare('SELECT * FROM customers WHERE id=?').get(r.lastInsertRowid));
   }
@@ -1639,11 +1643,13 @@ async function handleApi(req, res, url) {
     const cid = +parts[2];
     // a customer may edit ONLY their own contact details (never their pricing type)
     const ownRecord = user && user.role === 'customer' && user.customer_id === cid;
-    // an agent may adjust the negotiated discount on a customer they've
-    // actually referred an order for — same scoping GET /customers already
-    // uses to decide which customers show up in their "My customers" list
+    // an agent may adjust the negotiated discount on a customer they either
+    // created themselves or have referred an order for — same scoping GET
+    // /customers already uses to decide who shows up in "My customers"
     const isAgentOwner = !ownRecord && user && user.role === 'agent' &&
-      !!db.prepare('SELECT 1 FROM orders WHERE customer_id=? AND agent_id=? LIMIT 1').get(cid, user.agent_id);
+      !!db.prepare(`SELECT 1 FROM customers WHERE id=? AND agent_id=?
+                    UNION SELECT 1 FROM orders WHERE customer_id=? AND agent_id=? LIMIT 1`)
+        .get(cid, user.agent_id, cid, user.agent_id);
     if (!ownRecord && !isAgentOwner) requireRole(user, ['admin', 'manager', 'finance']);
     const b = await readBody(req);
     const cur = db.prepare('SELECT * FROM customers WHERE id=?').get(cid);

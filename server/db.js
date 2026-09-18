@@ -345,6 +345,10 @@ function migrate(db) {
   // a negotiated flat Rs-off-per-bottle rate for one specific customer, on
   // top of whatever their type (retail/wholesale/...) already resolves to
   if (!cols.includes('discount_amount')) db.exec('ALTER TABLE customers ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0');
+  // the agent who referred/created this customer, if any — lets an agent
+  // manage a customer (see it in "My customers", set their rate) from the
+  // moment they add them, without waiting for a first order to exist
+  if (!cols.includes('agent_id')) db.exec('ALTER TABLE customers ADD COLUMN agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL');
 
   const pcols = db.prepare(`PRAGMA table_info(products)`).all().map(c => c.name);
   if (!pcols.includes('image_url')) db.exec('ALTER TABLE products ADD COLUMN image_url TEXT');

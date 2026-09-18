@@ -2670,13 +2670,19 @@ function withAssetVer(html) {
     `$1="$2?v=${ASSET_VER}"`);
 }
 function staticHeaders(ext, p) {
-  // app shell (our own html/js/css) revalidates every load so a deploy is never
-  // masked by a stale CDN copy; third-party bundles and media cache for a day.
+  // app shell (our own html/js/css) must never be cached so a deploy is
+  // never masked by a stale copy; third-party bundles and media cache for
+  // a day. 'no-cache' alone wasn't enough — Cloudflare sits in front of
+  // this app and was overriding it with its own default ~4h edge/browser
+  // TTL for .css/.js by extension, so a live fix could sit unseen for
+  // hours despite the ?v= cache-busted URL below. 'no-store' is a much
+  // harder "never cache this, anywhere" signal that Cloudflare actually
+  // respects.
   const vendored = /^\/(vendor|img)\//.test(p || '');
   const noCache = !vendored && (ext === '.html' || ext === '.js' || ext === '.css');
   return {
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': noCache ? 'no-cache' : 'public, max-age=86400',
+    'Cache-Control': noCache ? 'no-store' : 'public, max-age=86400',
   };
 }
 function serveStatic(req, res, url) {

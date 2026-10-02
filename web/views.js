@@ -2918,14 +2918,21 @@ function modalEditProduct(id) {
     const p = ps.find(x => x.id === id);
     if (!p) return;
     const state = {};
+    // the Pack size field below owns the "(N-Pack)" marker — strip it from
+    // the name shown here so it isn't edited in two places at once
+    const curPack = packCount(p.name);
+    const cleanName = p.name.replace(/\s*\(\d+-Pack\)/i, '');
     openModal('Edit product — ' + API.esc(p.name), `
       <div class="modal-bd">
         <label class="muted">Name</label>
-        <input id="epName" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(p.name)}">
+        <input id="epName" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(cleanName)}">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-          <div><label class="muted">Size (ml)</label><input id="epSize" class="input" style="width:100%" type="number" min="0" value="${p.size_ml}"></div>
-          <div><label class="muted">Base price (Rs)</label><input id="epPrice" class="input" style="width:100%" type="number" min="0" step="0.5" value="${p.price}"></div>
+          <div><label class="muted">Size (ml, per bottle)</label><input id="epSize" class="input" style="width:100%" type="number" min="0" value="${p.size_ml}"></div>
+          <div><label class="muted">Price (Rs)</label><input id="epPrice" class="input" style="width:100%" type="number" min="0" step="0.5" value="${p.price}"></div>
         </div>
+        <label class="muted">Pack size (optional)</label>
+        <input id="epPack" class="input" style="width:100%;margin-bottom:4px" type="number" min="2" value="${curPack || ''}" placeholder="e.g. 6, 12, 24 — leave blank for a single bottle">
+        <p class="muted" style="font-size:11.5px;margin:0 0 10px">Sold as its own product (own price, own stock). Price is for the whole pack, not per bottle.</p>
         <label class="muted">Description (optional)</label>
         <textarea id="epDesc" class="input" style="width:100%;margin-bottom:10px;min-height:60px;resize:vertical" placeholder="What makes this bottle worth ordering — shown on the shop and order page">${API.esc(p.description || '')}</textarea>
         ${photoPickerHtml('ep', p.image_url)}
@@ -2935,8 +2942,11 @@ function modalEditProduct(id) {
        <button class="btn primary" id="epSave">Save</button>`);
     wirePhotoPicker('ep', state);
     document.getElementById('epSave').addEventListener('click', async () => {
+      const pack = Number(document.getElementById('epPack').value) || 0;
+      let name = document.getElementById('epName').value.trim();
+      if (pack > 1) name += ` (${pack}-Pack)`;
       const b = {
-        name: document.getElementById('epName').value.trim(),
+        name,
         size_ml: Number(document.getElementById('epSize').value),
         price: Number(document.getElementById('epPrice').value),
         description: document.getElementById('epDesc').value.trim(),

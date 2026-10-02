@@ -483,6 +483,19 @@ function seedCatalog(db) {
     ['PurePak 6 L', 6000, 45, 'Family-size drinking water'],
     ['PurePak 12 L', 12000, 80, 'Office & home dispenser water'],
     ['PurePak 19 L', 19000, 110, 'Dispenser-grade drinking water'],
+    // most people ordering the smaller sizes want a pack, not a single
+    // bottle — these are genuinely separate products (own price, own
+    // stock), matched by the "(N-Pack)" marker in the name (see
+    // packCount() in web/views.js), priced here as a plain N× multiple
+    // of the single-bottle price with no bulk discount baked in
+    ['PurePak 500 ML (6-Pack) - Pure', 500, 60, 'Six 500ml bottles, pure'],
+    ['PurePak 500 ML (12-Pack) - Pure', 500, 120, 'Twelve 500ml bottles, pure'],
+    ['PurePak 500 ML (6-Pack) - Mix', 500, 60, 'Six 500ml bottles, mixed'],
+    ['PurePak 500 ML (12-Pack) - Mix', 500, 120, 'Twelve 500ml bottles, mixed'],
+    ['PurePak 1.5 L (6-Pack) - Pure', 1500, 120, 'Six 1.5L bottles, pure'],
+    ['PurePak 1.5 L (12-Pack) - Pure', 1500, 240, 'Twelve 1.5L bottles, pure'],
+    ['PurePak 1.5 L (6-Pack) - Mix', 1500, 120, 'Six 1.5L bottles, mixed'],
+    ['PurePak 1.5 L (12-Pack) - Mix', 1500, 240, 'Twelve 1.5L bottles, mixed'],
   ];
   for (const p of products) insP.run(...p);
 }

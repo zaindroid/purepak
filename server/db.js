@@ -476,10 +476,9 @@ function seedCatalog(db) {
   // Products — PurePak's real lineup from purepak.com.pk
   const insP = db.prepare('INSERT INTO products(name,size_ml,price,description) VALUES (?,?,?,?)');
   const products = [
-    ['PurePak 500 ML - Pure', 500, 10, 'Portable bottled drinking water'],
-    ['PurePak 500 ML - Mix', 500, 10, 'Portable bottled drinking water, mixed'],
-    ['PurePak 1.5 L - Pure', 1500, 20, 'Everyday bottled drinking water'],
-    ['PurePak 1.5 L - Mix', 1500, 20, 'Everyday bottled drinking water, mixed'],
+    // no single-bottle 500ml/1.5L — PurePak only sells those as packs (see
+    // below), since almost nobody orders a single small bottle. 6/12/19 L
+    // are the single-container sizes that still make sense on their own.
     ['PurePak 6 L', 6000, 45, 'Family-size drinking water'],
     ['PurePak 12 L', 12000, 80, 'Office & home dispenser water'],
     ['PurePak 19 L', 19000, 110, 'Dispenser-grade drinking water'],

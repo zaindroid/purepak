@@ -166,8 +166,13 @@ const App = {
 
   // shows the "Get the Android app" link (login screen + sidebar) once a
   // build has actually been uploaded — stays hidden otherwise so nobody
-  // gets a dead link
+  // gets a dead link. Also stays hidden inside the Android app or the iOS
+  // app itself — window.PurePak is the JS bridge both native wrappers
+  // inject (addJavascriptInterface on Android, WKUserScript on iOS), so
+  // its presence means "already running in one of the native apps",
+  // where an "install the Android app" link makes no sense either way.
   async initAppDownloadLinks() {
+    if (window.PurePak) return;
     let info;
     try { info = await API.androidAppInfo(); } catch { return; }
     if (!info || !info.available) return;

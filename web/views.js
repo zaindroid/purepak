@@ -2570,9 +2570,8 @@ function modalEditCustomer(id) {
             <div><label class="muted">Area</label><input id="cuArea" class="input" style="width:100%" value="${API.esc(c.area || '')}"></div>
           </div>
           <label class="muted">Address</label>
-          <input id="cuAddress" class="input" style="width:100%;margin-bottom:6px" placeholder="Start typing an address…" autocomplete="off" value="${API.esc(c.address || '')}">
-          <button type="button" class="pin-btn" id="cuPinBtn" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.3"/></svg><span id="cuPinBtnLbl">${c.lat != null ? 'Location set — tap to adjust' : 'Set exact location on map'}</span></button>
-          <div id="cuMap" class="geo-map" hidden></div>
+          <input id="cuAddress" class="input" style="width:100%;margin-bottom:4px" placeholder="House / office, street, sector, city" value="${API.esc(c.address || '')}">
+          <p class="muted" style="font-size:11.5px;margin:0 0 10px">${c.lat != null ? 'They’ve set an exact map pin from their own app — only they can move it, so it’s accurate to where they actually are.' : 'No exact map pin yet — they can set one themselves from their app.'}</p>
           <label class="muted">Customer type (sets their pricing)</label>
           ${canChangeType ? `<select id="cuType" class="input" style="width:100%;margin-bottom:4px">
             ${types.map(t => `<option value="${t}" ${t === c.type ? 'selected' : ''}>${t[0].toUpperCase() + t.slice(1)}</option>`).join('')}
@@ -2584,17 +2583,6 @@ function modalEditCustomer(id) {
         </div>`,
         `<button class="btn ghost" data-close-modal>Cancel</button>
          <button class="btn primary" id="cuSave">Save</button>`);
-      let cuLat = c.lat, cuLng = c.lng;
-      if (window.GeoPicker) GeoPicker.attach({
-        addressInput: document.getElementById('cuAddress'),
-        mapContainer: document.getElementById('cuMap'),
-        pinBtn: document.getElementById('cuPinBtn'),
-        initial: c.lat != null ? { lat: c.lat, lng: c.lng } : null,
-        onChange: (lat, lng) => {
-          cuLat = lat; cuLng = lng;
-          document.getElementById('cuPinBtnLbl').textContent = 'Location set — tap to adjust';
-        },
-      });
       document.getElementById('cuSave').addEventListener('click', async () => {
         const b = {
           name: document.getElementById('cuName').value.trim(),
@@ -2602,7 +2590,11 @@ function modalEditCustomer(id) {
           area: document.getElementById('cuArea').value.trim() || null,
           address: document.getElementById('cuAddress').value.trim() || null,
           discount_amount: Number(document.getElementById('cuDiscount').value) || 0,
-          lat: cuLat, lng: cuLng,
+          // never staff-settable — see the note above the address field:
+          // only the customer, standing at their actual location, can
+          // drop an accurate pin. Pass their existing one through
+          // unchanged rather than wiping it on an unrelated edit.
+          lat: c.lat, lng: c.lng,
         };
         if (canChangeType) b.type = document.getElementById('cuType').value;
         try {

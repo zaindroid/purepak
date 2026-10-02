@@ -1627,9 +1627,11 @@ async function handleApi(req, res, url) {
     if (!b.name || !b.phone) return err(res, 400, 'name and phone required');
     const types = db.prepare('SELECT name FROM customer_types').all().map(r => r.name);
     const type = types.includes(b.type) ? b.type : 'retail';
-    const cLat = b.lat, cLng = b.lng;
-    const hasLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
-      Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
+    // no lat/lng here, ever — this endpoint is only ever called by staff/
+    // agents creating a customer on someone else's behalf, never by the
+    // customer themselves, and only they can set an exact pin they'd
+    // actually be standing at (see PATCH /customers below). They set
+    // their own once they sign in, from their profile.
     const discountAmount = Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0;
     // an agent-created customer is theirs from the start — shows up in
     // "My customers" and is editable by them immediately, not just after
@@ -1637,7 +1639,7 @@ async function handleApi(req, res, url) {
     const ownerAgentId = user.role === 'agent' ? user.agent_id : null;
     const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type,lat,lng,discount_amount,agent_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
       .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type,
-        hasLatLng ? cLat : null, hasLatLng ? cLng : null, discountAmount, ownerAgentId);
+        null, null, discountAmount, ownerAgentId);
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
     return json(res, 201, db.prepare('SELECT * FROM customers WHERE id=?').get(r.lastInsertRowid));
   }
@@ -1665,8 +1667,20 @@ async function handleApi(req, res, url) {
       ? (Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0)
       : cur.discount_amount;
     const cLat = b.lat, cLng = b.lng;
-    const hasLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
+    const requestedLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
       Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
+    // only the customer themselves can set or move their exact pin — an
+    // admin/agent/manager has no way to verify a location is actually
+    // accurate, so this is ignored entirely from a non-owner request,
+    // not just hidden from the staff-side edit UI (web/views.js's
+    // modalEditCustomer no longer even offers it, but enforcing it here
+    // means a raw API call can't do it either)
+    const hasLatLng = ownRecord && requestedLatLng;
+    // a changed address with no new pin to match it invalidates whatever
+    // pin was there before — but only when the customer is the one
+    // editing; staff fixing a typo'd address shouldn't silently wipe a
+    // pin they were never allowed to touch in the first place
+    const shouldClearPin = ownRecord && b.address !== undefined && b.address !== cur.address && !hasLatLng;
     db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=?, lat=?, lng=?, discount_amount=? WHERE id=?`)
       .run(ownRecord ? cur.name : (b.name != null ? String(b.name).trim() || cur.name : cur.name),
         b.contact_name !== undefined ? (b.contact_name || null) : cur.contact_name,
@@ -1675,8 +1689,8 @@ async function handleApi(req, res, url) {
         b.address !== undefined ? (b.address || null) : cur.address,
         b.area !== undefined ? (b.area || null) : cur.area,
         wantType,
-        hasLatLng ? cLat : (b.address !== undefined && b.address !== cur.address ? null : cur.lat),
-        hasLatLng ? cLng : (b.address !== undefined && b.address !== cur.address ? null : cur.lng),
+        hasLatLng ? cLat : (shouldClearPin ? null : cur.lat),
+        hasLatLng ? cLng : (shouldClearPin ? null : cur.lng),
         wantDiscount,
         cid);
     b.type = wantType; // downstream checks use b.type

@@ -11,6 +11,7 @@ window.onViewRender = function (route, view) {
   if (route === 'home' && typeof initCustomerHome === 'function') initCustomerHome();
   else document.body.classList.remove('has-cartbar'); // storefront-only page padding
   if (route === 'backups' && typeof initBackupsView === 'function') initBackupsView();
+  if (route === 'profile' && typeof initCustomerProfile === 'function') initCustomerProfile();
 };
 // toast alias used by views
 window.ppToast = function (msg, cls) { if (window.App) App.toast(msg, cls); };
@@ -859,7 +860,7 @@ const App = {
         const address = document.getElementById('cpAddress').value.trim();
         if (phone.length < 7) { this.toast('Enter a valid phone number', 'warn'); break; }
         try {
-          await API.updateCustomer(API.user.customer_id, { phone, address });
+          await API.updateCustomer(API.user.customer_id, { phone, address, lat: _profileLat, lng: _profileLng });
           const me = await API.me(); API.setAuth(API.token, me);
           this.toast('Profile saved', 'ok'); this.refresh();
         } catch (e) { this.toast(e.message, 'bad'); }

@@ -433,7 +433,7 @@ function newSession(user) {
 // ---------- auth ----------
 function userView(u) {
   const agent = u.agent_id ? db.prepare('SELECT name, commission_pct FROM agents WHERE id=?').get(u.agent_id) : null;
-  const cust = u.customer_id ? db.prepare('SELECT name, type, phone, address, area, contact_name FROM customers WHERE id=?').get(u.customer_id) : null;
+  const cust = u.customer_id ? db.prepare('SELECT name, type, phone, address, area, contact_name, lat, lng FROM customers WHERE id=?').get(u.customer_id) : null;
   return {
     id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role,
     agent_id: u.agent_id, customer_id: u.customer_id,
@@ -448,6 +448,8 @@ function userView(u) {
     customerAddress: cust ? cust.address : null,
     customerArea: cust ? cust.area : null,
     customerContact: cust ? cust.contact_name : null,
+    customerLat: cust ? cust.lat : null,
+    customerLng: cust ? cust.lng : null,
     salary: u.salary, status: u.status, last_login_at: u.last_login_at,
   };
 }

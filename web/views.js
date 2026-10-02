@@ -220,9 +220,10 @@ async function loadOrderForm(prefill = {}, agentRates = null) {
         : `<span class="muted" style="font-size:11px">no set cost — ${API.user.agentCommissionPct || 0}% commission</span>`)
       : '';
     const { base, variant } = splitVariant(p.name);
+    const packN = packCount(p.name);
     return `<div class="field"><span class="item-line-lbl">${img ? `<img class="item-thumb" src="${img}" alt="" loading="lazy">` : ''}<span>${API.esc(base)}</span>${variantChip(variant)}</span>
       <div class="row2"><input type="number" min="0" max="999" step="1" inputmode="numeric" data-itemqty="${p.id}" data-agentcost="${cost != null ? cost : ''}" value="${it.qty || 0}">
-      <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / each${costHint ? '<br>' + costHint : ''}</div></div></div>
+      <div class="field" style="margin:0"><span style="visibility:hidden">-</span><div style="padding:0 4px">${API.fmtMoney(unit)} / ${packN ? `pack of ${packN}` : 'each'}${costHint ? '<br>' + costHint : ''}</div></div></div>
     </div>`;
   }).join('');
 }
@@ -1508,17 +1509,28 @@ function splitVariant(name) {
 function variantChip(variant) {
   return variant ? `<span class="chip variant-${variant.toLowerCase()}">${API.esc(variant)}</span>` : '';
 }
+// "PurePak 500 ML (6-Pack) - Pure" — most people buying 500ml/1.5L don't
+// want a single bottle, so these sizes also come as 6/12-bottle packs,
+// named with the pack count embedded ahead of the Pure/Mix suffix
+// splitVariant() already strips. Detected by name, not a schema flag —
+// pack products are otherwise completely normal rows (own price, own
+// stock), see the server/db.js seed comment next to them for why.
+function packCount(name) {
+  const m = /\((\d+)-Pack\)/i.exec(name || '');
+  return m ? Number(m[1]) : 0;
+}
 
 const prodEff = (p) => (typeof p.effective_price === 'number' ? p.effective_price : p.price);
 function prodPriceHtml(p) {
   const eff = prodEff(p);
   const save = Math.max(0, Math.round((p.price || 0) - eff));
+  const n = packCount(p.name);
   // .prod-sub keeps a reserved height whether or not there's a discount, so every
   // card is exactly the same height and the grid stays even.
   return `
     <div class="prod-price-row">
       <span class="prod-now">${API.fmtMoney(eff)}</span>
-      <span class="prod-per">/ bottle</span>
+      <span class="prod-per">/ ${n ? `pack of ${n}` : 'bottle'}</span>
     </div>
     <div class="prod-sub">${save > 0
       ? `<s>${API.fmtMoney(p.price)}</s><span class="sv">save ${API.fmtMoney(save)}</span>`
@@ -1598,13 +1610,13 @@ async function viewCustomerHome() {
   const popId = (products.find(p => p.size_ml === 19000) || products.slice().sort((a, b) => b.size_ml - a.size_ml)[0] || {}).id;
   const last = orders[0];
 
-  const card = (p) => { const { base, variant } = splitVariant(p.name); return `
+  const card = (p) => { const { base, variant } = splitVariant(p.name); const packN = packCount(p.name); return `
     <article class="prod${p.id === popId ? ' is-pop' : ''}" data-pid="${p.id}" data-price="${prodEff(p)}">
       ${p.id === popId ? `<span class="prod-pop">Popular</span>` : ''}
       <div class="prod-ic">${bottleThumb(p, p.size_ml >= 6000 ? IC.bottleBig : IC.bottle)}</div>
       <div class="prod-main">
         <div class="prod-nm">${API.esc(base)}${variant ? ' ' + variantChip(variant) : ''}</div>
-        <div class="prod-sz">${sizeLabel(p.size_ml)} bottle</div>
+        <div class="prod-sz">${sizeLabel(p.size_ml)} bottle${packN ? ` × ${packN}` : ''}</div>
         <div class="prod-pricing">${prodPriceHtml(p)}</div>
       </div>
       <div class="prod-cta">
@@ -1724,15 +1736,28 @@ function modalCustomerAddress(after) {
     <label class="muted">Phone number</label>
     <input id="caPhone" class="input" style="width:100%;margin-bottom:10px" placeholder="03xx-xxxxxxx" value="${API.esc(u.customerPhone || u.phone || '')}">
     <label class="muted">Delivery address</label>
-    <textarea id="caAddress" class="input" style="width:100%;min-height:80px" placeholder="House / office, street, sector, city">${API.esc(u.customerAddress || '')}</textarea>`,
+    <input id="caAddress" class="input" style="width:100%;margin-bottom:6px" placeholder="Start typing an address…" autocomplete="off" value="${API.esc(u.customerAddress || '')}">
+    <button type="button" class="pin-btn" id="caPinBtn" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.3"/></svg><span id="caPinBtnLbl">${u.customerLat != null ? 'Location set — tap to adjust' : 'Set exact location on map'}</span></button>
+    <div id="caMap" class="geo-map" hidden></div>`,
     `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn primary" id="caSave">Save & continue</button>`);
+  let caLat = u.customerLat, caLng = u.customerLng;
+  if (window.GeoPicker) GeoPicker.attach({
+    addressInput: document.getElementById('caAddress'),
+    mapContainer: document.getElementById('caMap'),
+    pinBtn: document.getElementById('caPinBtn'),
+    initial: u.customerLat != null ? { lat: u.customerLat, lng: u.customerLng } : null,
+    onChange: (lat, lng) => {
+      caLat = lat; caLng = lng;
+      document.getElementById('caPinBtnLbl').textContent = 'Location set — tap to adjust';
+    },
+  });
   document.getElementById('caSave').addEventListener('click', async () => {
     const phone = document.getElementById('caPhone').value.trim();
     const address = document.getElementById('caAddress').value.trim();
     if (phone.length < 7) return toast('Enter a valid phone number', 'warn');
     if (address.length < 6) return toast('Enter your delivery address', 'warn');
     try {
-      await API.updateCustomer(u.customer_id, { phone, address });
+      await API.updateCustomer(u.customer_id, { phone, address, lat: caLat, lng: caLng });
       // refresh the cached user so the checkout guard passes
       try { const me = await API.me(); API.setAuth(API.token, me); } catch {}
       closeModal(); toast('Delivery details saved', 'ok');
@@ -1741,10 +1766,17 @@ function modalCustomerAddress(after) {
   });
 }
 
+// picked by GeoPicker in initCustomerProfile(), read by app.js's
+// 'save-my-profile' handler — two separate scripts/functions, this is the
+// shared hand-off (see modalEditCustomer/modalCustomerAddress for the
+// modal-local equivalent, which can just use a closure instead)
+let _profileLat = null, _profileLng = null;
+
 async function viewCustomerProfile() {
   const u = API.user;
   let me = u;
   try { me = await API.me(); } catch {}
+  _profileLat = me.customerLat; _profileLng = me.customerLng;
   return `
   <div class="page-head"><h1>My profile</h1></div>
   <div class="card" style="padding:16px">
@@ -1756,10 +1788,29 @@ async function viewCustomerProfile() {
     <label class="muted">Phone number</label>
     <input id="cpPhone" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(me.customerPhone || me.phone || '')}" placeholder="03xx-xxxxxxx">
     <label class="muted">Delivery address</label>
-    <textarea id="cpAddress" class="input" style="width:100%;min-height:84px;margin-bottom:14px" placeholder="House / office, street, sector, city">${API.esc(me.customerAddress || '')}</textarea>
+    <input id="cpAddress" class="input" style="width:100%;margin-bottom:6px" placeholder="Start typing an address…" autocomplete="off" value="${API.esc(me.customerAddress || '')}">
+    <button type="button" class="pin-btn" id="cpPinBtn" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.3"/></svg><span id="cpPinBtnLbl">${me.customerLat != null ? 'Location set — tap to adjust' : 'Set exact location on map'}</span></button>
+    <div id="cpMap" class="geo-map" hidden></div>
+    <p class="muted" style="font-size:11.5px;margin:8px 0 14px">An exact pin helps the rider find you faster — optional, your typed address always works on its own.</p>
     <button class="btn primary block" data-act="save-my-profile">Save profile</button>
     <p class="muted" style="font-size:11.5px;margin:10px 0 0">Your pricing tier is set by PurePak. Contact us if it looks wrong.</p>
   </div>`;
+}
+
+function initCustomerProfile() {
+  if (!window.GeoPicker) return;
+  const addressInput = document.getElementById('cpAddress');
+  if (!addressInput) return;
+  GeoPicker.attach({
+    addressInput,
+    mapContainer: document.getElementById('cpMap'),
+    pinBtn: document.getElementById('cpPinBtn'),
+    initial: _profileLat != null ? { lat: _profileLat, lng: _profileLng } : null,
+    onChange: (lat, lng) => {
+      _profileLat = lat; _profileLng = lng;
+      document.getElementById('cpPinBtnLbl').textContent = 'Location set — tap to adjust';
+    },
+  });
 }
 
 async function onShopClick(e) {
@@ -2836,9 +2887,12 @@ function modalAddProduct() {
       <label class="muted">Name</label>
       <input id="prName" class="input" style="width:100%;margin-bottom:10px" placeholder="e.g. PurePak 2 L">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-        <div><label class="muted">Size (ml)</label><input id="prSize" class="input" style="width:100%" type="number" min="0" placeholder="2000"></div>
-        <div><label class="muted">Base price (Rs)</label><input id="prPrice" class="input" style="width:100%" type="number" min="0" step="0.5" placeholder="25"></div>
+        <div><label class="muted">Size (ml, per bottle)</label><input id="prSize" class="input" style="width:100%" type="number" min="0" placeholder="2000"></div>
+        <div><label class="muted">Price (Rs)</label><input id="prPrice" class="input" style="width:100%" type="number" min="0" step="0.5" placeholder="25"></div>
       </div>
+      <label class="muted">Pack size (optional)</label>
+      <input id="prPack" class="input" style="width:100%;margin-bottom:4px" type="number" min="2" placeholder="e.g. 6 or 12 — leave blank for a single bottle">
+      <p class="muted" style="font-size:11.5px;margin:0 0 10px">Sold as its own product (own price, own stock) — most people ordering 500ml/1.5L want a pack, not one bottle. Set the price for the whole pack, not per bottle.</p>
       <label class="muted">Description (optional)</label>
       <textarea id="prDesc" class="input" style="width:100%;margin-bottom:10px;min-height:60px;resize:vertical" placeholder="What makes this bottle worth ordering — shown on the shop and order page"></textarea>
       ${photoPickerHtml('pr')}
@@ -2847,8 +2901,11 @@ function modalAddProduct() {
      <button class="btn primary" id="prSubmit">Add product</button>`);
   wirePhotoPicker('pr', state);
   document.getElementById('prSubmit').addEventListener('click', async () => {
+    const pack = Number(document.getElementById('prPack').value) || 0;
+    let name = document.getElementById('prName').value.trim();
+    if (pack > 1 && name && !/\(\d+-Pack\)/i.test(name)) name += ` (${pack}-Pack)`;
     const b = {
-      name: document.getElementById('prName').value.trim(),
+      name,
       size_ml: Number(document.getElementById('prSize').value),
       price: Number(document.getElementById('prPrice').value),
       description: document.getElementById('prDesc').value.trim() || undefined,

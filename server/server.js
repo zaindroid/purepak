@@ -1394,13 +1394,43 @@ async function handleApi(req, res, url) {
     let role = ['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer', 'labour'].includes(b.role) ? b.role : null;
     if (name.length < 2) return err(res, 400, 'Please enter a name');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(res, 400, 'Please enter a valid email');
-    if (password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
     if (!role) return err(res, 400, 'Please choose a role');
     if (user.role !== 'admin' && (role === 'admin' || role === 'manager'))
       return err(res, 403, 'Only an admin can create admin/manager accounts');
-    if (db.prepare('SELECT id FROM users WHERE email=?').get(email))
-      return err(res, 409, 'An account with this email already exists');
     const salary = role === 'agent' ? null : (b.salary != null && b.salary !== '' ? Number(b.salary) : null);
+    // customer accounts are ready immediately; staff accounts start pending
+    // until the manager/admin activates them from Team.
+    const status = role === 'customer' ? 'active' : 'pending';
+
+    const existing = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+    if (existing) {
+      // not a new account — reassigning this email's existing account to a
+      // different role (e.g. a self-registered customer the business wants
+      // to bring on as staff). Admin-only: handing an email over to a new
+      // role is a bigger deal than a normal add, and canManage alone (which
+      // includes manager) isn't enough gate for that. Password is optional
+      // here — leave it blank to keep whatever they already had.
+      if (user.role !== 'admin') return err(res, 403, 'Only an admin can reassign an existing account to a different role');
+      if (password && password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
+      let agentId = existing.agent_id, custId = existing.customer_id;
+      if (role === 'agent' && !agentId) {
+        agentId = Number(db.prepare('INSERT INTO agents(name,phone,commission_pct) VALUES (?,?,5)').run(name, phone).lastInsertRowid);
+      }
+      if (role === 'customer' && !custId) {
+        custId = Number(db.prepare('INSERT INTO customers(name,phone,type) VALUES (?,?,?)').run(name, phone || '', 'retail').lastInsertRowid);
+      }
+      db.prepare(`UPDATE users SET name=?, phone=?, password_hash=?, role=?, salary=?, agent_id=?, customer_id=?, status=? WHERE id=?`)
+        .run(name, phone, password ? hashPassword(password) : existing.password_hash, role, salary,
+          role === 'agent' ? agentId : null, role === 'customer' ? custId : null, status, existing.id);
+      const u = db.prepare('SELECT * FROM users WHERE id=?').get(existing.id);
+      audit(user, 'user.reassign', 'user', existing.id,
+        `${existing.email} reassigned from ${existing.role} to ${role} by ${user.name}.`, { role: existing.role }, { role });
+      notify(staffUserIds().filter(x => x !== user.id), 'team', 'Account reassigned',
+        `${name} (${email}) moved to ${role} by ${user.name}.`, 'user#' + u.id);
+      return json(res, 200, userView(u));
+    }
+
+    if (password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
     let agentId = null, custId = null;
     if (role === 'agent') {
       const ar = db.prepare('INSERT INTO agents(name,phone,commission_pct) VALUES (?,?,5)').run(name, phone);
@@ -1410,9 +1440,6 @@ async function handleApi(req, res, url) {
       const cr = db.prepare('INSERT INTO customers(name,phone,type) VALUES (?,?,?)').run(name, phone || '', 'retail');
       custId = Number(cr.lastInsertRowid);
     }
-    // customer accounts are ready immediately; staff accounts start pending
-    // until the manager/admin activates them from Team.
-    const status = role === 'customer' ? 'active' : 'pending';
     const ur = db.prepare(`INSERT INTO users(name,email,phone,password_hash,role,salary,agent_id,customer_id,status)
                             VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(name, email, phone, hashPassword(password), role, salary, agentId, custId, status);

@@ -723,14 +723,64 @@ function seedTestAccounts(db) {
   }
 }
 
+// One-shot full reset: wipes every user/business-history table, keeps the
+// product catalog (products/product_prices/customer_types) and settings —
+// those are configuration, not "accounts" or history, and nobody asking
+// for a clean slate on users/orders means "also make me re-enter every
+// product". Gated by PUREPAK_FACTORY_RESET=1 so it only ever runs when
+// deliberately set, and the caller is responsible for unsetting that env
+// var right after confirming it ran — this function has no way to
+// un-arm itself, it would wipe again on every subsequent boot otherwise.
+// FK-ordered: children before the parents they reference.
+function factoryReset(db) {
+  if (process.env.PUREPAK_FACTORY_RESET !== '1') return false;
+  const tables = [
+    'order_items', 'deliveries', 'commissions', 'device_tokens', 'payroll',
+    'production_entries', 'password_resets', 'notifications', 'agent_prices',
+    'orders', 'users', 'agents', 'customers', 'ledger', 'audit_log', 'receipts', 'offers',
+  ];
+  // node:sqlite's DatabaseSync has no .transaction() helper (that's a
+  // better-sqlite3-only API) — plain BEGIN/COMMIT over .exec() instead
+  db.exec('BEGIN');
+  try {
+    for (const t of tables) db.exec(`DELETE FROM ${t}`);
+    // restart autoincrement ids from 1 so a fresh install looks genuinely fresh
+    db.exec(`DELETE FROM sqlite_sequence WHERE name IN (${tables.map(t => `'${t}'`).join(',')})`);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return true;
+}
+
+// A permanent admin account that exists outside the normal "first user to
+// sign up becomes admin" onboarding flow, and survives factoryReset() —
+// re-seeded every boot (create-if-missing, never overwrites a password
+// changed since) so it's always there to log in and debug/oversee with,
+// independent of whatever state the rest of the user base is in. Only
+// runs when both env vars are explicitly set; silently does nothing
+// otherwise, same convention as seedTestAccounts.
+function seedMasterAccount(db) {
+  const email = (process.env.PUREPAK_MASTER_EMAIL || '').trim().toLowerCase();
+  const password = process.env.PUREPAK_MASTER_PASSWORD || '';
+  if (!email || !password) return;
+  const existing = db.prepare('SELECT id FROM users WHERE email=?').get(email);
+  if (existing) return; // already there — never silently reset a password that may have since changed
+  db.prepare(`INSERT INTO users(name,email,password_hash,role,status) VALUES (?,?,?,'admin','active')`)
+    .run('Master Admin', email, hashPassword(password));
+}
+
 function init() {
   applyPendingRestore();
   const db = open();
   migrate(db);
+  factoryReset(db);
   seedCatalog(db);
   const demo = process.env.PUREPAK_DEMO === '1';
   const seeded = demo ? seedDemo(db) : false;
   seedTestAccounts(db);
+  seedMasterAccount(db);
   return { db, seeded, demo, DB_PATH };
 }
 

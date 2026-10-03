@@ -431,6 +431,17 @@ function newSession(user) {
 }
 
 // ---------- auth ----------
+// "First person to sign up owns the app" (grants admin) excludes the
+// permanent master account (see db.js's seedMasterAccount) — that account
+// exists for debugging/oversight outside the normal onboarding flow, not
+// as the app's real owner, so it shouldn't consume the one "first account"
+// slot and leave the actual first real signup stuck as a plain customer.
+function realUserCount() {
+  const masterEmail = (process.env.PUREPAK_MASTER_EMAIL || '').trim().toLowerCase();
+  if (!masterEmail) return db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+  return db.prepare('SELECT COUNT(*) AS c FROM users WHERE email<>?').get(masterEmail).c;
+}
+
 function userView(u) {
   const agent = u.agent_id ? db.prepare('SELECT name, commission_pct FROM agents WHERE id=?').get(u.agent_id) : null;
   const cust = u.customer_id ? db.prepare('SELECT name, type, phone, address, area, contact_name, lat, lng FROM customers WHERE id=?').get(u.customer_id) : null;
@@ -1060,7 +1071,7 @@ async function handleApi(req, res, url) {
     let u = db.prepare(`SELECT * FROM users WHERE email=? AND active=1`).get(email);
     if (!u) {
       const name = String(payload.name || email.split('@')[0]).trim().slice(0, 80);
-      const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+      const userCount = realUserCount();
       const role = userCount === 0 ? 'admin' : 'customer'; // same "first account owns it" rule as /auth/signup
       const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
       let custId = null;
@@ -1128,7 +1139,7 @@ async function handleApi(req, res, url) {
     const password = String(b.password || '');
     // Public self-signup creates a customer account — EXCEPT on a brand-new database,
     // where the very first account becomes the owner (admin) so the system can be managed.
-    const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+    const userCount = realUserCount();
     const role = userCount === 0 ? 'admin' : 'customer';
     if (name.length < 2) return err(res, 400, 'Please enter your full name');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(res, 400, 'Please enter a valid email');

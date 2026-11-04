@@ -224,6 +224,17 @@ function migrate(db) {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- fleet registry — lets a driver pick which vehicle they drove that day
+  -- from a fixed list (instead of typing a name), so the same vehicle's
+  -- km add up correctly across different drivers who used it on different days.
+  CREATE TABLE IF NOT EXISTS vehicles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    plate_no TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   -- daily driver/vehicle travel log — how far a vehicle went that day on
   -- deliveries. Append-only (no edit/delete endpoints, same convention as
   -- the rest of this app) so it stays a trustworthy audit record of actual
@@ -231,7 +242,7 @@ function migrate(db) {
   CREATE TABLE IF NOT EXISTS vehicle_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     driver_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    vehicle TEXT,
+    vehicle_id INTEGER REFERENCES vehicles(id) ON DELETE SET NULL,
     log_date TEXT NOT NULL,
     distance_km REAL NOT NULL,
     start_odometer REAL,
@@ -241,6 +252,7 @@ function migrate(db) {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_vehicle_logs_driver_date ON vehicle_logs(driver_user_id, log_date);
+  CREATE INDEX IF NOT EXISTS idx_vehicle_logs_vehicle ON vehicle_logs(vehicle_id, log_date);
 
   CREATE TABLE IF NOT EXISTS commissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -753,7 +765,7 @@ function seedTestAccounts(db) {
 function factoryReset(db) {
   if (process.env.PUREPAK_FACTORY_RESET !== '1') return false;
   const tables = [
-    'order_items', 'deliveries', 'vehicle_logs', 'commissions', 'device_tokens', 'payroll',
+    'order_items', 'deliveries', 'vehicle_logs', 'vehicles', 'commissions', 'device_tokens', 'payroll',
     'production_entries', 'password_resets', 'notifications', 'agent_prices',
     'orders', 'users', 'agents', 'customers', 'ledger', 'audit_log', 'receipts', 'offers',
   ];

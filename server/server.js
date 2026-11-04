@@ -2117,16 +2117,52 @@ async function handleApi(req, res, url) {
     return json(res, 200, db.prepare('SELECT * FROM deliveries WHERE id=?').get(did));
   }
 
+  // ---- vehicle registry (fleet a driver picks from when logging a trip) ----
+  if (method === 'GET' && parts[1] === 'vehicles' && parts.length === 2) {
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
+    let sql = 'SELECT * FROM vehicles';
+    if (url.searchParams.get('all') !== '1') sql += ' WHERE active=1';
+    sql += ' ORDER BY name';
+    return json(res, 200, db.prepare(sql).all());
+  }
+  if (method === 'POST' && parts[1] === 'vehicles' && parts.length === 2) {
+    requireRole(user, ['admin', 'manager']);
+    const b = await readBody(req);
+    const name = String(b.name || '').trim().slice(0, 100);
+    if (!name) return err(res, 400, 'Enter a vehicle name');
+    const plateNo = String(b.plate_no || '').trim().slice(0, 30) || null;
+    const r = db.prepare('INSERT INTO vehicles(name,plate_no) VALUES (?,?)').run(name, plateNo);
+    const vid = Number(r.lastInsertRowid);
+    audit(user, 'vehicle.create', 'vehicle', vid, `Added vehicle ${name}`, null, { name, plate_no: plateNo });
+    return json(res, 201, db.prepare('SELECT * FROM vehicles WHERE id=?').get(vid));
+  }
+  if (method === 'PATCH' && parts[1] === 'vehicles' && parts.length === 3 && !isNaN(+parts[2])) {
+    requireRole(user, ['admin', 'manager']);
+    const vehId = +parts[2];
+    const cur = db.prepare('SELECT * FROM vehicles WHERE id=?').get(vehId);
+    if (!cur) return err(res, 404, 'Vehicle not found');
+    const b = await readBody(req);
+    const name = b.name != null ? (String(b.name).trim().slice(0, 100) || cur.name) : cur.name;
+    const plateNo = b.plate_no !== undefined ? (String(b.plate_no || '').trim().slice(0, 30) || null) : cur.plate_no;
+    const active = b.active != null ? (b.active ? 1 : 0) : cur.active;
+    db.prepare('UPDATE vehicles SET name=?, plate_no=?, active=? WHERE id=?').run(name, plateNo, active, vehId);
+    audit(user, 'vehicle.update', 'vehicle', vehId, `Updated vehicle ${name}`, cur, { name, plate_no: plateNo, active });
+    return json(res, 200, db.prepare('SELECT * FROM vehicles WHERE id=?').get(vehId));
+  }
+
   // ---- vehicle travel logs (daily km per driver/vehicle, audit record) ----
   if (method === 'GET' && parts[1] === 'vehicle-logs' && parts.length === 2) {
     requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
-    let sql = `SELECT vl.*, u.name driver_name, r.name recorded_by_name
+    let sql = `SELECT vl.*, u.name driver_name, r.name recorded_by_name, v.name vehicle_name, v.plate_no vehicle_plate
                FROM vehicle_logs vl JOIN users u ON u.id = vl.driver_user_id
-               LEFT JOIN users r ON r.id = vl.recorded_by WHERE 1=1`;
+               LEFT JOIN users r ON r.id = vl.recorded_by
+               LEFT JOIN vehicles v ON v.id = vl.vehicle_id WHERE 1=1`;
     const args = [];
     if (user.role === 'delivery') { sql += ' AND vl.driver_user_id=?'; args.push(user.id); }
     const driverId = url.searchParams.get('driver_id');
     if (driverId && user.role !== 'delivery') { sql += ' AND vl.driver_user_id=?'; args.push(+driverId); }
+    const vehicleIdFilter = url.searchParams.get('vehicle_id');
+    if (vehicleIdFilter) { sql += ' AND vl.vehicle_id=?'; args.push(+vehicleIdFilter); }
     const from = url.searchParams.get('from');
     if (from) { sql += ' AND vl.log_date>=?'; args.push(from); }
     const to = url.searchParams.get('to');
@@ -2148,21 +2184,23 @@ async function handleApi(req, res, url) {
     }
     const distanceKm = Number(b.distance_km);
     if (!Number.isFinite(distanceKm) || distanceKm <= 0) return err(res, 400, 'Enter the distance travelled (km)');
+    const veh = db.prepare('SELECT * FROM vehicles WHERE id=? AND active=1').get(Number(b.vehicle_id));
+    if (!veh) return err(res, 400, 'Select which vehicle was used');
     const logDate = /^\d{4}-\d{2}-\d{2}$/.test(b.log_date || '') ? b.log_date : new Date().toISOString().slice(0, 10);
-    const vehicle = String(b.vehicle || '').trim().slice(0, 100) || null;
     const startOdo = b.start_odometer != null && b.start_odometer !== '' ? Number(b.start_odometer) : null;
     const endOdo = b.end_odometer != null && b.end_odometer !== '' ? Number(b.end_odometer) : null;
     const notes = String(b.notes || '').trim().slice(0, 300) || null;
-    const r = db.prepare(`INSERT INTO vehicle_logs(driver_user_id,vehicle,log_date,distance_km,start_odometer,end_odometer,notes,recorded_by)
+    const r = db.prepare(`INSERT INTO vehicle_logs(driver_user_id,vehicle_id,log_date,distance_km,start_odometer,end_odometer,notes,recorded_by)
                            VALUES (?,?,?,?,?,?,?,?)`)
-      .run(driverUserId, vehicle, logDate, distanceKm, startOdo, endOdo, notes, user.id);
+      .run(driverUserId, veh.id, logDate, distanceKm, startOdo, endOdo, notes, user.id);
     const vid = Number(r.lastInsertRowid);
     audit(user, 'vehicle_log.create', 'vehicle_log', vid,
-      `${distanceKm} km logged for ${vehicle || 'a vehicle'} on ${logDate}`,
-      null, { driver_user_id: driverUserId, vehicle, log_date: logDate, distance_km: distanceKm });
-    return json(res, 201, db.prepare(`SELECT vl.*, u.name driver_name, r.name recorded_by_name
+      `${distanceKm} km logged for ${veh.name} on ${logDate}`,
+      null, { driver_user_id: driverUserId, vehicle_id: veh.id, log_date: logDate, distance_km: distanceKm });
+    return json(res, 201, db.prepare(`SELECT vl.*, u.name driver_name, r.name recorded_by_name, v.name vehicle_name, v.plate_no vehicle_plate
                                        FROM vehicle_logs vl JOIN users u ON u.id = vl.driver_user_id
-                                       LEFT JOIN users r ON r.id = vl.recorded_by WHERE vl.id=?`).get(vid));
+                                       LEFT JOIN users r ON r.id = vl.recorded_by
+                                       LEFT JOIN vehicles v ON v.id = vl.vehicle_id WHERE vl.id=?`).get(vid));
   }
 
   // ---- agents ----

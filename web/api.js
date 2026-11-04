@@ -109,6 +109,9 @@ const API = (() => {
     updateDelivery: (id, b) => patch('/deliveries/' + id, b),
     vehicleLogs: (params) => g('/vehicle-logs' + (params ? '?' + new URLSearchParams(params).toString() : '')),
     logVehicleTrip: (b) => post('/vehicle-logs', b),
+    vehicles: (all) => g('/vehicles' + (all ? '?all=1' : '')),
+    createVehicle: (b) => post('/vehicles', b),
+    updateVehicle: (id, b) => patch('/vehicles/' + id, b),
     routePlan: (lat, lng) => {
       const q = new URLSearchParams();
       if (lat != null && lng != null) { q.set('lat', lat); q.set('lng', lng); }

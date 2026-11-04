@@ -2736,14 +2736,33 @@ function modalLogProduction() {
     });
   });
 }
-// ================= VEHICLE TRAVEL LOG (daily km per driver, audit record) =================
+// ================= VEHICLE TRAVEL LOG (daily km per driver + per vehicle, audit record) =================
 async function viewVehicleLogs() {
-  const logs = await API.vehicleLogs({});
+  const [logs, vehicles] = await Promise.all([API.vehicleLogs({}), API.vehicles(1)]);
   const totalKm = Math.round(logs.reduce((s, l) => s + Number(l.distance_km || 0), 0));
+  // same vehicle, driven by different drivers on different days — sum km per vehicle
+  const byVehicle = new Map();
+  for (const l of logs) {
+    const key = l.vehicle_id || 0;
+    const cur = byVehicle.get(key) || { name: l.vehicle_name || 'Unassigned', plate: l.vehicle_plate, km: 0, trips: 0 };
+    cur.km += Number(l.distance_km || 0);
+    cur.trips += 1;
+    byVehicle.set(key, cur);
+  }
+  const vehicleRow = (v) => `<div class="team-row">
+    <div class="team-av">${IC.route}</div>
+    <div class="team-main">
+      <div class="nm">${API.esc(v.name)}${v.plate_no ? ` <span class="muted">· ${API.esc(v.plate_no)}</span>` : ''}</div>
+      <div class="sub">${v.active ? 'Active' : 'Inactive'}</div>
+    </div>
+    <div class="team-acts" style="flex:none">
+      <button class="btn ghost sm" data-act="toggle-vehicle" data-id="${v.id}" data-active="${v.active ? 0 : 1}">${v.active ? 'Deactivate' : 'Activate'}</button>
+    </div>
+  </div>`;
   const row = (l) => `<tr>
     ${V.m('Date', API.fmtDay(l.log_date))}
     ${V.m('Driver', API.esc(l.driver_name))}
-    ${V.m('Vehicle', API.esc(l.vehicle || '—'), 'muted')}
+    ${V.m('Vehicle', API.esc(l.vehicle_name || 'Unassigned') + (l.vehicle_plate ? ` <span class="muted">· ${API.esc(l.vehicle_plate)}</span>` : ''))}
     ${V.m('Distance', l.distance_km + ' km', 'tv num')}
     ${V.m('Odometer', (l.start_odometer != null && l.end_odometer != null) ? `${l.start_odometer} → ${l.end_odometer}` : '—', 'muted')}
     ${V.m('Notes', API.esc(l.notes || ''), 'muted')}
@@ -2751,7 +2770,23 @@ async function viewVehicleLogs() {
   </tr>`;
   return `
   <div class="page-head"><h1>Vehicle travel log</h1>
-    <button class="btn primary sm" data-act="log-vehicle-trip">+ Log a trip</button></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn sm" data-act="add-vehicle">+ Add vehicle</button>
+      <button class="btn primary sm" data-act="log-vehicle-trip">+ Log a trip</button>
+    </div>
+  </div>
+  <div class="sec-t">Fleet</div>
+  <div class="card" style="margin-bottom:16px">${vehicles.length ? vehicles.map(vehicleRow).join('') : '<div class="card-pad empty">No vehicles yet — add one so drivers can log trips against it.</div>'}</div>
+  <div class="sec-t">Km by vehicle</div>
+  <div class="card" style="margin-bottom:16px"><div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Vehicle</th><th class="num">Trips logged</th><th class="num">Total km</th></tr></thead>
+    <tbody>${[...byVehicle.values()].sort((a, b) => b.km - a.km).map(v => `<tr>
+      ${V.m('Vehicle', API.esc(v.name) + (v.plate ? ` <span class="muted">· ${API.esc(v.plate)}</span>` : ''))}
+      ${V.m('Trips', v.trips, 'tv num')}
+      ${V.m('Total km', Math.round(v.km) + ' km', 'tv num')}
+    </tr>`).join('') || `<tr><td colspan="3"><div class="empty">No travel logged yet</div></td></tr>`}</tbody>
+  </table></div></div>
+  <div class="sec-t">All entries</div>
   <p class="muted" style="font-size:12.5px;margin:2px 0 14px">${logs.length} ${logs.length === 1 ? 'entry' : 'entries'} · ${totalKm} km total. Append-only audit record — entries can't be edited or deleted once submitted.</p>
   <div class="card"><div class="tbl-wrap"><table class="tbl">
     <thead><tr><th>Date</th><th>Driver</th><th>Vehicle</th><th class="num">Distance</th><th>Odometer</th><th>Notes</th><th>Logged by</th></tr></thead>
@@ -2763,7 +2798,7 @@ async function viewVehicleLogMine() {
   const entryRow = (l) => `<div class="team-row">
     <div class="team-av">${IC.route}</div>
     <div class="team-main">
-      <div class="nm">${l.distance_km} km${l.vehicle ? ' · ' + API.esc(l.vehicle) : ''}</div>
+      <div class="nm">${l.distance_km} km${l.vehicle_name ? ' · ' + API.esc(l.vehicle_name) : ''}</div>
       <div class="sub">${API.fmtDay(l.log_date)}${l.notes ? ' · ' + API.esc(l.notes) : ''}</div>
     </div>
   </div>`;
@@ -2773,10 +2808,30 @@ async function viewVehicleLogMine() {
   <p class="muted" style="font-size:12.5px;margin:2px 0 14px">A daily record of how far you travelled on deliveries — kept for audit.</p>
   ${mine.map(entryRow).join('') || '<div class="card card-pad empty">Nothing logged yet — tap "+ Log today\'s trip" to add your first entry.</div>'}`;
 }
+function modalAddVehicle() {
+  openModal('Add a vehicle', `
+    <div class="modal-bd">
+      <label class="muted">Vehicle name</label>
+      <input id="avName" class="input" style="width:100%;margin-bottom:10px" placeholder="e.g. Ravi truck">
+      <label class="muted">Plate number (optional)</label>
+      <input id="avPlate" class="input" style="width:100%" placeholder="e.g. ICT-1234">
+    </div>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button>
+     <button class="btn primary" id="avSubmit">Add</button>`);
+  document.getElementById('avSubmit').addEventListener('click', async () => {
+    const name = document.getElementById('avName').value.trim();
+    if (!name) { toast('Enter a vehicle name', 'warn'); return; }
+    try {
+      await API.createVehicle({ name, plate_no: document.getElementById('avPlate').value.trim() || undefined });
+      closeModal();
+      toast('Vehicle added', 'ok');
+      App.refresh();
+    } catch (e) { toast(e.message, 'err'); }
+  });
+}
 function modalLogVehicleTrip() {
   const forAdmin = API.user.role !== 'delivery';
-  const driversPromise = forAdmin ? API.users() : Promise.resolve(null);
-  driversPromise.then(users => {
+  Promise.all([API.vehicles(), forAdmin ? API.users() : Promise.resolve(null)]).then(([vehicles, users]) => {
     const drivers = users ? users.filter(u => u.role === 'delivery' && u.status === 'active') : null;
     openModal('Log a vehicle trip', `
       <div class="modal-bd">
@@ -2784,10 +2839,12 @@ function modalLogVehicleTrip() {
         <select id="vlDriver" class="input" style="width:100%;margin-bottom:10px">
           ${drivers.map(d => `<option value="${d.id}">${API.esc(d.name)}</option>`).join('') || '<option value="">No drivers found</option>'}
         </select>` : ''}
-        <div class="row2" style="margin-bottom:10px">
-          <div class="field" style="margin:0"><span>Vehicle</span><input id="vlVehicle" class="input" placeholder="e.g. Ravi truck"></div>
-          <div class="field" style="margin:0"><span>Date</span><input id="vlDate" class="input" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
-        </div>
+        <label class="muted">Vehicle</label>
+        <select id="vlVehicle" class="input" style="width:100%;margin-bottom:10px">
+          ${vehicles.map(v => `<option value="${v.id}">${API.esc(v.name)}${v.plate_no ? ' · ' + API.esc(v.plate_no) : ''}</option>`).join('') || '<option value="">No vehicles set up yet</option>'}
+        </select>
+        <label class="muted">Date</label>
+        <input id="vlDate" class="input" type="date" style="width:100%;margin-bottom:10px" value="${new Date().toISOString().slice(0, 10)}">
         <div class="row2" style="margin-bottom:10px">
           <div class="field" style="margin:0"><span>Distance travelled (km)</span><input id="vlKm" class="input" type="number" min="0" step="0.1" placeholder="e.g. 42"></div>
           <div class="field" style="margin:0"><span>Odometer start → end (optional)</span>
@@ -2802,13 +2859,14 @@ function modalLogVehicleTrip() {
     document.getElementById('vlSubmit').addEventListener('click', async () => {
       const b = {
         driver_user_id: drivers ? +document.getElementById('vlDriver').value : undefined,
-        vehicle: document.getElementById('vlVehicle').value.trim() || undefined,
+        vehicle_id: +document.getElementById('vlVehicle').value,
         log_date: document.getElementById('vlDate').value,
         distance_km: +document.getElementById('vlKm').value,
         start_odometer: document.getElementById('vlOdoStart').value || undefined,
         end_odometer: document.getElementById('vlOdoEnd').value || undefined,
         notes: document.getElementById('vlNotes').value.trim() || undefined,
       };
+      if (!(b.vehicle_id > 0)) { toast('Select which vehicle was used', 'warn'); return; }
       if (!(b.distance_km > 0)) { toast('Enter the distance travelled', 'warn'); return; }
       try {
         await API.logVehicleTrip(b);

@@ -644,7 +644,7 @@ const App = {
   },
 
   async act(ds, ev) {
-    const { act, id, status, to, product, name, due, method } = ds;
+    const { act, id, status, to, product, name, due, method, active } = ds;
     const role = API.user.role;
     const stop = () => ev && ev.stopPropagation();
     switch (act) {
@@ -752,6 +752,15 @@ const App = {
       }
       case 'log-production': stop(); modalLogProduction(); break;
       case 'log-vehicle-trip': stop(); modalLogVehicleTrip(); break;
+      case 'add-vehicle': stop(); modalAddVehicle(); break;
+      case 'toggle-vehicle': stop(); {
+        try {
+          await API.updateVehicle(+id, { active: active === '1' });
+          this.toast(active === '1' ? 'Vehicle activated' : 'Vehicle deactivated');
+          this.refresh();
+        } catch (e) { this.toast(e.message, 'err'); }
+        break;
+      }
       case 'review-production': stop(); {
         try {
           await API.reviewProduction(+id, { status });

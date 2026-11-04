@@ -80,7 +80,8 @@ input,select,textarea{font:inherit}
 .nav-section:first-child{padding-top:4px}
 .side-foot{padding:12px 14px;border-top:1px solid var(--line-2)}
 .app-dl-link{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;box-sizing:border-box;padding:9px 10px;margin-bottom:10px;
-  border:1px solid var(--line-2);border-radius:10px;color:var(--blue-700);font-size:12.5px;font-weight:700;text-decoration:none}
+  border:1px solid var(--line-2);border-radius:10px;color:var(--blue-700);font-size:12.5px;font-weight:700;text-decoration:none;
+  background:none;cursor:pointer;font-family:inherit}
 .app-dl-link:hover{background:var(--blue-50)}
 .app-dl-link b{font-weight:700;color:var(--ink-3);font-size:11px}
 .app-dl-upload{display:block;width:100%;background:none;border:none;color:var(--ink-3);font-size:11px;font-weight:600;

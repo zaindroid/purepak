@@ -10,6 +10,11 @@
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="vendor/leaflet.css">
 <link rel="icon" href="img/pure-pak-logo.jpeg">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/img/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PurePak">
 <script src="https://accounts.google.com/gsi/client?hl=en" async defer></script>
 </head>
 <body>
@@ -52,6 +57,10 @@
           <span>Get the Android app <b id="sideApkVer"></b></span>
         </a>
         <button id="sideApkUpload" class="app-dl-upload hidden" type="button">Upload new app version</button>
+        <button id="sideInstallApp" class="app-dl-link hidden" type="button">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
+          <span>Install this app</span>
+        </button>
         <button id="sideLogout" class="btn ghost block">Sign out</button>
       </div>
     </aside>
@@ -90,6 +99,10 @@
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13"/><path d="M7 12l5 5 5-5"/><path d="M5 21h14"/></svg>
       <span>Get the Android app <b id="loginApkVer"></b></span>
     </a>
+    <button id="loginInstallApp" class="app-dl-link hidden" type="button">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18.01"/></svg>
+      <span>Install this app</span>
+    </button>
   </div>
 </div>
 

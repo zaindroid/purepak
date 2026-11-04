@@ -160,8 +160,43 @@ const App = {
     window.addEventListener('hashchange', () => this.render());
 
     this.initAppDownloadLinks();
+    this.initInstallPrompt();
     this.initGoogleSignIn();
     this.initTestAccounts();
+  },
+
+  // lets a browser visitor install this web app to their home screen/app
+  // drawer like a native app (Chrome/Edge on Android fire beforeinstallprompt;
+  // desktop Chrome too). iOS Safari never fires that event — there's no
+  // programmatic install there, so the button just explains the manual
+  // Share -> "Add to Home Screen" step instead. Stays hidden inside the
+  // Android/iOS wrapper apps themselves (window.PurePak) and once already
+  // running installed (display-mode: standalone) — nothing to install there.
+  initInstallPrompt() {
+    if (window.PurePak) return;
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) return;
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+    const buttons = document.querySelectorAll('#sideInstallApp, #loginInstallApp');
+    if (!buttons.length) return;
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    let deferred = null;
+    if (iOS) buttons.forEach(el => el.classList.remove('hidden'));
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferred = e;
+      buttons.forEach(el => el.classList.remove('hidden'));
+    });
+    window.addEventListener('appinstalled', () => buttons.forEach(el => el.classList.add('hidden')));
+    buttons.forEach(el => el.addEventListener('click', async () => {
+      if (deferred) {
+        deferred.prompt();
+        await deferred.userChoice;
+        deferred = null;
+        buttons.forEach(b => b.classList.add('hidden'));
+      } else if (iOS) {
+        this.toast('Tap the Share icon, then "Add to Home Screen"');
+      }
+    }));
   },
 
   // shows the "Get the Android app" link (login screen + sidebar) once a

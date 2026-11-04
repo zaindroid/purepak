@@ -224,6 +224,24 @@ function migrate(db) {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- daily driver/vehicle travel log — how far a vehicle went that day on
+  -- deliveries. Append-only (no edit/delete endpoints, same convention as
+  -- the rest of this app) so it stays a trustworthy audit record of actual
+  -- road usage rather than something that can be quietly edited later.
+  CREATE TABLE IF NOT EXISTS vehicle_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    driver_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    vehicle TEXT,
+    log_date TEXT NOT NULL,
+    distance_km REAL NOT NULL,
+    start_odometer REAL,
+    end_odometer REAL,
+    notes TEXT,
+    recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_vehicle_logs_driver_date ON vehicle_logs(driver_user_id, log_date);
+
   CREATE TABLE IF NOT EXISTS commissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id INTEGER NOT NULL REFERENCES agents(id),
@@ -735,7 +753,7 @@ function seedTestAccounts(db) {
 function factoryReset(db) {
   if (process.env.PUREPAK_FACTORY_RESET !== '1') return false;
   const tables = [
-    'order_items', 'deliveries', 'commissions', 'device_tokens', 'payroll',
+    'order_items', 'deliveries', 'vehicle_logs', 'commissions', 'device_tokens', 'payroll',
     'production_entries', 'password_resets', 'notifications', 'agent_prices',
     'orders', 'users', 'agents', 'customers', 'ledger', 'audit_log', 'receipts', 'offers',
   ];

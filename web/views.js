@@ -2736,6 +2736,89 @@ function modalLogProduction() {
     });
   });
 }
+// ================= VEHICLE TRAVEL LOG (daily km per driver, audit record) =================
+async function viewVehicleLogs() {
+  const logs = await API.vehicleLogs({});
+  const totalKm = Math.round(logs.reduce((s, l) => s + Number(l.distance_km || 0), 0));
+  const row = (l) => `<tr>
+    ${V.m('Date', API.fmtDay(l.log_date))}
+    ${V.m('Driver', API.esc(l.driver_name))}
+    ${V.m('Vehicle', API.esc(l.vehicle || '—'), 'muted')}
+    ${V.m('Distance', l.distance_km + ' km', 'tv num')}
+    ${V.m('Odometer', (l.start_odometer != null && l.end_odometer != null) ? `${l.start_odometer} → ${l.end_odometer}` : '—', 'muted')}
+    ${V.m('Notes', API.esc(l.notes || ''), 'muted')}
+    ${V.m('Logged by', API.esc(l.recorded_by_name || '—'), 'muted')}
+  </tr>`;
+  return `
+  <div class="page-head"><h1>Vehicle travel log</h1>
+    <button class="btn primary sm" data-act="log-vehicle-trip">+ Log a trip</button></div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">${logs.length} ${logs.length === 1 ? 'entry' : 'entries'} · ${totalKm} km total. Append-only audit record — entries can't be edited or deleted once submitted.</p>
+  <div class="card"><div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>Date</th><th>Driver</th><th>Vehicle</th><th class="num">Distance</th><th>Odometer</th><th>Notes</th><th>Logged by</th></tr></thead>
+    <tbody>${logs.map(row).join('') || `<tr><td colspan="7"><div class="empty"><div class="em-ico">${IC.route}</div>No travel logged yet</div></td></tr>`}</tbody>
+  </table></div></div>`;
+}
+async function viewVehicleLogMine() {
+  const mine = await API.vehicleLogs({});
+  const entryRow = (l) => `<div class="team-row">
+    <div class="team-av">${IC.route}</div>
+    <div class="team-main">
+      <div class="nm">${l.distance_km} km${l.vehicle ? ' · ' + API.esc(l.vehicle) : ''}</div>
+      <div class="sub">${API.fmtDay(l.log_date)}${l.notes ? ' · ' + API.esc(l.notes) : ''}</div>
+    </div>
+  </div>`;
+  return `
+  <div class="page-head"><h1>My travel log</h1>
+    <button class="btn primary sm" data-act="log-vehicle-trip">+ Log today's trip</button></div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">A daily record of how far you travelled on deliveries — kept for audit.</p>
+  ${mine.map(entryRow).join('') || '<div class="card card-pad empty">Nothing logged yet — tap "+ Log today\'s trip" to add your first entry.</div>'}`;
+}
+function modalLogVehicleTrip() {
+  const forAdmin = API.user.role !== 'delivery';
+  const driversPromise = forAdmin ? API.users() : Promise.resolve(null);
+  driversPromise.then(users => {
+    const drivers = users ? users.filter(u => u.role === 'delivery' && u.status === 'active') : null;
+    openModal('Log a vehicle trip', `
+      <div class="modal-bd">
+        ${drivers ? `<label class="muted">Driver</label>
+        <select id="vlDriver" class="input" style="width:100%;margin-bottom:10px">
+          ${drivers.map(d => `<option value="${d.id}">${API.esc(d.name)}</option>`).join('') || '<option value="">No drivers found</option>'}
+        </select>` : ''}
+        <div class="row2" style="margin-bottom:10px">
+          <div class="field" style="margin:0"><span>Vehicle</span><input id="vlVehicle" class="input" placeholder="e.g. Ravi truck"></div>
+          <div class="field" style="margin:0"><span>Date</span><input id="vlDate" class="input" type="date" value="${new Date().toISOString().slice(0, 10)}"></div>
+        </div>
+        <div class="row2" style="margin-bottom:10px">
+          <div class="field" style="margin:0"><span>Distance travelled (km)</span><input id="vlKm" class="input" type="number" min="0" step="0.1" placeholder="e.g. 42"></div>
+          <div class="field" style="margin:0"><span>Odometer start → end (optional)</span>
+            <div style="display:flex;gap:6px"><input id="vlOdoStart" class="input" type="number" placeholder="start"><input id="vlOdoEnd" class="input" type="number" placeholder="end"></div>
+          </div>
+        </div>
+        <label class="muted">Note (optional)</label>
+        <input id="vlNotes" class="input" style="width:100%" placeholder="e.g. covered the Golra + Tarnol route">
+      </div>`,
+      `<button class="btn ghost" data-close-modal>Cancel</button>
+       <button class="btn primary" id="vlSubmit">Submit</button>`);
+    document.getElementById('vlSubmit').addEventListener('click', async () => {
+      const b = {
+        driver_user_id: drivers ? +document.getElementById('vlDriver').value : undefined,
+        vehicle: document.getElementById('vlVehicle').value.trim() || undefined,
+        log_date: document.getElementById('vlDate').value,
+        distance_km: +document.getElementById('vlKm').value,
+        start_odometer: document.getElementById('vlOdoStart').value || undefined,
+        end_odometer: document.getElementById('vlOdoEnd').value || undefined,
+        notes: document.getElementById('vlNotes').value.trim() || undefined,
+      };
+      if (!(b.distance_km > 0)) { toast('Enter the distance travelled', 'warn'); return; }
+      try {
+        await API.logVehicleTrip(b);
+        closeModal();
+        toast('Trip logged', 'ok');
+        App.refresh();
+      } catch (e) { toast(e.message, 'err'); }
+    });
+  });
+}
 function modalAdjustStock(productId) {
   API.products().then(products => {
     const p = products.find(x => x.id === productId);
@@ -2969,6 +3052,7 @@ const ADMIN_NAV = [
   { to: 'orders', icon: IC.box, label: 'Orders', section: 'Operations' },
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
   { to: 'route', icon: IC.route, label: 'Route map' },
+  { to: 'vehicle-logs', icon: IC.route, label: 'Vehicle travel log' },
   { to: 'production', icon: IC.stack, label: 'Production & stock' },
   { to: 'customers', icon: IC.users, label: 'Customers', section: 'Sales' },
   { to: 'agents', icon: IC.badge, label: 'Agents & commissions' },
@@ -2996,6 +3080,7 @@ const MANAGER_NAV = [
   { to: 'orders', icon: IC.box, label: 'Orders', section: 'Operations' },
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
   { to: 'route', icon: IC.route, label: 'Route map' },
+  { to: 'vehicle-logs', icon: IC.route, label: 'Vehicle travel log' },
   { to: 'production', icon: IC.stack, label: 'Production & stock' },
   { to: 'offers', icon: IC.megaphone, label: 'Offers', section: 'Sales' },
   { to: 'bookkeeping', icon: IC.book, label: 'Bookkeeping', section: 'Finance' },
@@ -3030,6 +3115,7 @@ function navFor(role) {
     delivery: [
       { to: 'route', icon: IC.route, label: 'Smart route' },
       { to: 'deliveries', icon: IC.truck, label: 'All deliveries' },
+      { to: 'vehicle-logs', icon: IC.route, label: 'My travel log' },
       { to: 'receipts', icon: IC.receipt, label: 'Scan receipt' },
     ],
     employee: [
@@ -3051,7 +3137,7 @@ function navFor(role) {
 const VIEW = {
   admin: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
-    route: viewSmartRoute, production: viewProductionAdmin,
+    route: viewSmartRoute, 'vehicle-logs': viewVehicleLogs, production: viewProductionAdmin,
     customers: viewCustomers,
     agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
@@ -3059,14 +3145,14 @@ const VIEW = {
   },
   manager: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
-    route: viewSmartRoute, production: viewProductionAdmin,
+    route: viewSmartRoute, 'vehicle-logs': viewVehicleLogs, production: viewProductionAdmin,
     offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts, backups: viewBackups,
   },
   finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents },
   agent: { dashboard: viewAgentDashboard, orders: viewOrders, customers: viewAgentCustomers, commissions: viewCommissions, receipts: viewReceipts },
-  delivery: { route: viewSmartRoute, deliveries: viewDeliveries, receipts: viewReceipts },
+  delivery: { route: viewSmartRoute, deliveries: viewDeliveries, 'vehicle-logs': viewVehicleLogMine, receipts: viewReceipts },
   shop_manager: { orders: viewOrders, deliveries: viewDeliveries },
   employee: { profile: viewProfile, orders: viewOrders },
   labour: { production: viewProductionLog },

@@ -2117,6 +2117,54 @@ async function handleApi(req, res, url) {
     return json(res, 200, db.prepare('SELECT * FROM deliveries WHERE id=?').get(did));
   }
 
+  // ---- vehicle travel logs (daily km per driver/vehicle, audit record) ----
+  if (method === 'GET' && parts[1] === 'vehicle-logs' && parts.length === 2) {
+    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
+    let sql = `SELECT vl.*, u.name driver_name, r.name recorded_by_name
+               FROM vehicle_logs vl JOIN users u ON u.id = vl.driver_user_id
+               LEFT JOIN users r ON r.id = vl.recorded_by WHERE 1=1`;
+    const args = [];
+    if (user.role === 'delivery') { sql += ' AND vl.driver_user_id=?'; args.push(user.id); }
+    const driverId = url.searchParams.get('driver_id');
+    if (driverId && user.role !== 'delivery') { sql += ' AND vl.driver_user_id=?'; args.push(+driverId); }
+    const from = url.searchParams.get('from');
+    if (from) { sql += ' AND vl.log_date>=?'; args.push(from); }
+    const to = url.searchParams.get('to');
+    if (to) { sql += ' AND vl.log_date<=?'; args.push(to); }
+    sql += ' ORDER BY vl.log_date DESC, vl.id DESC';
+    return json(res, 200, db.prepare(sql).all(...args));
+  }
+  if (method === 'POST' && parts[1] === 'vehicle-logs' && parts.length === 2) {
+    requireRole(user, ['admin', 'manager', 'delivery']);
+    const b = await readBody(req);
+    // a driver can only log their own travel; admin/manager can back-fill
+    // for any driver (a missed day, a correction) via driver_user_id
+    let driverUserId = user.id;
+    if (user.role !== 'delivery') {
+      const target = Number(b.driver_user_id) || user.id;
+      const du = db.prepare(`SELECT id FROM users WHERE id=? AND role='delivery'`).get(target);
+      if (!du) return err(res, 400, 'Unknown driver');
+      driverUserId = du.id;
+    }
+    const distanceKm = Number(b.distance_km);
+    if (!Number.isFinite(distanceKm) || distanceKm <= 0) return err(res, 400, 'Enter the distance travelled (km)');
+    const logDate = /^\d{4}-\d{2}-\d{2}$/.test(b.log_date || '') ? b.log_date : new Date().toISOString().slice(0, 10);
+    const vehicle = String(b.vehicle || '').trim().slice(0, 100) || null;
+    const startOdo = b.start_odometer != null && b.start_odometer !== '' ? Number(b.start_odometer) : null;
+    const endOdo = b.end_odometer != null && b.end_odometer !== '' ? Number(b.end_odometer) : null;
+    const notes = String(b.notes || '').trim().slice(0, 300) || null;
+    const r = db.prepare(`INSERT INTO vehicle_logs(driver_user_id,vehicle,log_date,distance_km,start_odometer,end_odometer,notes,recorded_by)
+                           VALUES (?,?,?,?,?,?,?,?)`)
+      .run(driverUserId, vehicle, logDate, distanceKm, startOdo, endOdo, notes, user.id);
+    const vid = Number(r.lastInsertRowid);
+    audit(user, 'vehicle_log.create', 'vehicle_log', vid,
+      `${distanceKm} km logged for ${vehicle || 'a vehicle'} on ${logDate}`,
+      null, { driver_user_id: driverUserId, vehicle, log_date: logDate, distance_km: distanceKm });
+    return json(res, 201, db.prepare(`SELECT vl.*, u.name driver_name, r.name recorded_by_name
+                                       FROM vehicle_logs vl JOIN users u ON u.id = vl.driver_user_id
+                                       LEFT JOIN users r ON r.id = vl.recorded_by WHERE vl.id=?`).get(vid));
+  }
+
   // ---- agents ----
   if (method === 'GET' && parts[1] === 'agents') {
     requireRole(user, ['admin', 'manager', 'finance']);

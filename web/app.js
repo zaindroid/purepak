@@ -751,6 +751,7 @@ const App = {
         break;
       }
       case 'log-production': stop(); modalLogProduction(); break;
+      case 'log-vehicle-trip': stop(); modalLogVehicleTrip(); break;
       case 'review-production': stop(); {
         try {
           await API.reviewProduction(+id, { status });

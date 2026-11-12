@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { init, verifyPassword, hashPassword, DB_PATH, RESTORE_PENDING, TEST_ACCOUNTS } = require('./db');
+const mail = require('./mail');
 
 const PORT = Number(process.env.PORT || 4310);
 const { db } = init();
@@ -2578,6 +2579,62 @@ async function handleApi(req, res, url) {
     const token = String(b.token || '').trim();
     if (token) db.prepare('DELETE FROM device_tokens WHERE token=? AND user_id=?').run(token, user.id);
     return json(res, 200, { ok: true });
+  }
+
+  // ---- company mailbox (read-your-own @purepak.com.pk inbox in-app) ----
+  if (method === 'GET' && parts[1] === 'mailbox' && parts.length === 2) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    const mb = db.prepare('SELECT email FROM mailboxes WHERE user_id=?').get(user.id);
+    return json(res, 200, { connected: !!mb, email: mb ? mb.email : null });
+  }
+  if (method === 'POST' && parts[1] === 'mailbox' && parts.length === 2) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    const b = await readBody(req);
+    const email = String(b.email || '').trim().toLowerCase();
+    const password = String(b.password || '');
+    if (!/^[^\s@]+@purepak\.com\.pk$/.test(email)) return err(res, 400, 'Enter your @purepak.com.pk address');
+    if (!password) return err(res, 400, 'Enter your mailbox password');
+    const row = { email, imap_host: 'mail.purepak.com.pk', imap_port: 993, password_enc: mail.encryptPassword(password) };
+    try {
+      await mail.verifyMailbox(row);
+    } catch (e) {
+      return err(res, 400, 'Could not sign in to that mailbox — check the address and password');
+    }
+    db.prepare(`INSERT INTO mailboxes(user_id,email,imap_host,imap_port,password_enc,updated_at) VALUES (?,?,?,?,?,datetime('now'))
+                ON CONFLICT(user_id) DO UPDATE SET email=excluded.email, password_enc=excluded.password_enc, updated_at=datetime('now')`)
+      .run(user.id, row.email, row.imap_host, row.imap_port, row.password_enc);
+    audit(user, 'mailbox.connect', 'mailbox', user.id, `Connected ${email}`, null, { email });
+    return json(res, 200, { connected: true, email });
+  }
+  if (method === 'DELETE' && parts[1] === 'mailbox' && parts.length === 2) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    db.prepare('DELETE FROM mailboxes WHERE user_id=?').run(user.id);
+    audit(user, 'mailbox.disconnect', 'mailbox', user.id, 'Disconnected mailbox', null, null);
+    return json(res, 200, { connected: false });
+  }
+  if (method === 'GET' && parts[1] === 'mailbox' && parts[2] === 'messages' && parts.length === 3) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    const mb = db.prepare('SELECT * FROM mailboxes WHERE user_id=?').get(user.id);
+    if (!mb) return err(res, 404, 'No mailbox connected');
+    if (rateLimited('mailbox-list:' + user.id, 20, 60 * 1000)) return err(res, 429, 'Too many requests — wait a moment');
+    try {
+      const messages = await mail.listMessages(mb, 30);
+      return json(res, 200, messages);
+    } catch (e) {
+      return err(res, 502, 'Could not reach the mail server — try again shortly');
+    }
+  }
+  if (method === 'GET' && parts[1] === 'mailbox' && parts[2] === 'messages' && parts.length === 4 && !isNaN(+parts[3])) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    const mb = db.prepare('SELECT * FROM mailboxes WHERE user_id=?').get(user.id);
+    if (!mb) return err(res, 404, 'No mailbox connected');
+    if (rateLimited('mailbox-read:' + user.id, 30, 60 * 1000)) return err(res, 429, 'Too many requests — wait a moment');
+    try {
+      const message = await mail.readMessage(mb, +parts[3]);
+      return json(res, 200, message);
+    } catch (e) {
+      return err(res, 502, 'Could not open that message — try again shortly');
+    }
   }
   if (method === 'GET' && parts[1] === 'receipts' && parts.length === 2) {
     requireRole(user, ['admin', 'manager', 'finance', 'agent', 'delivery']);

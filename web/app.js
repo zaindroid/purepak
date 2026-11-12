@@ -679,7 +679,7 @@ const App = {
   },
 
   async act(ds, ev) {
-    const { act, id, status, to, product, name, due, method, active } = ds;
+    const { act, id, status, to, product, name, due, method, active, uid } = ds;
     const role = API.user.role;
     const stop = () => ev && ev.stopPropagation();
     switch (act) {
@@ -796,6 +796,32 @@ const App = {
         } catch (e) { this.toast(e.message, 'err'); }
         break;
       }
+      case 'connect-mailbox': stop(); {
+        const email = document.getElementById('mbEmail').value.trim();
+        const password = document.getElementById('mbPassword').value;
+        if (!email || !password) { this.toast('Enter your email and password', 'warn'); return; }
+        const btn = document.getElementById('mbConnectBtn');
+        btn.disabled = true; btn.textContent = 'Connecting…';
+        try {
+          await API.connectMailbox(email, password);
+          this.toast('Mailbox connected');
+          this.refresh();
+        } catch (e) {
+          this.toast(e.message, 'err');
+          btn.disabled = false; btn.textContent = 'Connect';
+        }
+        break;
+      }
+      case 'disconnect-mailbox': stop(); {
+        try {
+          await API.disconnectMailbox();
+          this.toast('Mailbox disconnected');
+          this.refresh();
+        } catch (e) { this.toast(e.message, 'err'); }
+        break;
+      }
+      case 'refresh-mail': stop(); this.refresh(); break;
+      case 'read-mail': stop(); modalReadMessage(+uid); break;
       case 'review-production': stop(); {
         try {
           await API.reviewProduction(+id, { status });

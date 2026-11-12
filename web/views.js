@@ -936,6 +936,84 @@ async function viewProfile() {
   </div>`;
 }
 
+// ================= EMAIL (read your @purepak.com.pk inbox in-app) =================
+async function viewMyEmail() {
+  const status = await API.mailboxStatus().catch(() => ({ connected: false }));
+  if (!status.connected) {
+    return `
+    <div class="page-head"><h1>Email</h1></div>
+    <div class="card" style="margin-top:14px;padding:20px;max-width:480px">
+      <h2 style="margin:0 0 6px">Connect your company email</h2>
+      <p class="muted" style="font-size:13px;margin:0 0 16px">Sign in with your @purepak.com.pk address to read it right here. Your password is encrypted and only ever used to fetch your mail.</p>
+      <label class="muted">Email address</label>
+      <input id="mbEmail" class="input" style="width:100%;margin:4px 0 10px" placeholder="yourname@purepak.com.pk">
+      <label class="muted">Password</label>
+      <input id="mbPassword" class="input" type="password" style="width:100%;margin:4px 0 14px" placeholder="Your mailbox password">
+      <button class="btn primary" id="mbConnectBtn" data-act="connect-mailbox" style="width:100%">Connect</button>
+    </div>
+    <div class="card" style="margin-top:14px;padding:16px;max-width:480px">
+      <div class="card-head"><h2 style="font-size:14px">Prefer your own Gmail or Outlook app?</h2></div>
+      <p class="muted" style="font-size:12.5px;margin:0 0 10px">Add your @purepak.com.pk account there instead, using these settings:</p>
+      <div style="font-size:12.5px;display:grid;gap:4px;font-family:monospace">
+        <div>IMAP host: mail.purepak.com.pk</div>
+        <div>IMAP port: 993 (SSL)</div>
+        <div>SMTP host: mail.purepak.com.pk (likely — check with IT if sending fails)</div>
+        <div>SMTP port: 465 (SSL)</div>
+        <div>Username: your full @purepak.com.pk address</div>
+      </div>
+    </div>`;
+  }
+  const messages = await API.mailboxMessages().catch(() => []);
+  const row = (m) => `<div class="team-row" data-act="read-mail" data-uid="${m.uid}" style="cursor:pointer">
+    <div class="team-av">${IC.mail}</div>
+    <div class="team-main">
+      <div class="nm" style="${m.unread ? 'font-weight:800' : ''}">${API.esc(m.subject)}</div>
+      <div class="sub">${API.esc(m.from)} · ${m.date ? API.fmtDate(m.date) : ''}</div>
+    </div>
+  </div>`;
+  return `
+  <div class="page-head"><h1>Email</h1>
+    <div style="display:flex;gap:8px">
+      <button class="btn sm ghost" data-act="refresh-mail">Refresh</button>
+      <button class="btn sm ghost" data-act="disconnect-mailbox">Disconnect</button>
+    </div>
+  </div>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Signed in as ${API.esc(status.email)}</p>
+  ${messages.map(row).join('') || '<div class="card card-pad empty">Inbox is empty.</div>'}`;
+}
+// Email content is from untrusted senders, never raw-injected: the subject
+// goes through API.esc(), and the HTML body renders inside a sandboxed
+// iframe (sandbox="" — no scripts, no forms, no same-origin) so nothing in
+// a received email can run script or reach the rest of the page.
+function modalReadMessage(uid) {
+  openModal('Loading…', '<div class="modal-bd"><p class="muted">Fetching message…</p></div>');
+  API.mailboxMessage(uid).then(m => {
+    openModal(API.esc(m.subject || '(no subject)'), `
+      <div class="modal-bd">
+        <p class="muted" style="font-size:12.5px;margin:0 0 4px">From: ${API.esc(m.from)}</p>
+        <p class="muted" style="font-size:12.5px;margin:0 0 14px">${m.date ? API.fmtDate(m.date) : ''}</p>
+        <div id="mailBodyHost" style="border-top:1px solid var(--line-2);padding-top:14px"></div>
+      </div>`,
+      `<button class="btn ghost" data-close-modal>Close</button>`);
+    const host = document.getElementById('mailBodyHost');
+    if (m.html) {
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', '');
+      frame.style.cssText = 'width:100%;height:55vh;border:0;background:#fff';
+      host.appendChild(frame);
+      frame.srcdoc = m.html;
+    } else {
+      const pre = document.createElement('div');
+      pre.style.cssText = 'white-space:pre-wrap;font-size:14px;line-height:1.6;max-height:55vh;overflow:auto';
+      pre.textContent = m.text || '';
+      host.appendChild(pre);
+    }
+  }).catch(e => {
+    openModal('Could not open message', `<div class="modal-bd"><p class="muted">${API.esc(e.message)}</p></div>`,
+      `<button class="btn ghost" data-close-modal>Close</button>`);
+  });
+}
+
 // ================= AGENT =================
 async function viewAgentDashboard() {
   const [k, orders] = await Promise.all([API.kpis(), API.orders()]);
@@ -3122,6 +3200,7 @@ const ADMIN_NAV = [
   { to: 'audit', icon: IC.clip, label: 'Audit trail' },
   { to: 'products', icon: IC.bottle, label: 'Products', section: 'Catalog & team' },
   { to: 'team', icon: IC.shield, label: 'Team' },
+  { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
 ];
 // Shop manager: a single-purpose profile that only runs the order pipeline —
@@ -3130,6 +3209,7 @@ const ADMIN_NAV = [
 const SHOP_MANAGER_NAV = [
   { to: 'orders', icon: IC.box, label: 'Orders' },
   { to: 'deliveries', icon: IC.truck, label: 'Deliveries' },
+  { to: 'email', icon: IC.mail, label: 'Email' },
 ];
 // Manager: everything admin has except customer records, agent management,
 // and commissions — those stay admin-only.
@@ -3148,6 +3228,7 @@ const MANAGER_NAV = [
   { to: 'audit', icon: IC.clip, label: 'Audit trail' },
   { to: 'products', icon: IC.bottle, label: 'Products', section: 'Catalog & team' },
   { to: 'team', icon: IC.shield, label: 'Team' },
+  { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
 ];
 function navFor(role) {
@@ -3162,6 +3243,7 @@ function navFor(role) {
       { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
       { to: 'payroll', icon: IC.wallet, label: 'Payroll' },
       { to: 'agents', icon: IC.badge, label: 'Agents & commissions' },
+      { to: 'email', icon: IC.mail, label: 'Email' },
     ],
     agent: [
       { to: 'dashboard', icon: IC.chart, label: 'My dashboard' },
@@ -3169,18 +3251,22 @@ function navFor(role) {
       { to: 'customers', icon: IC.users, label: 'My customers' },
       { to: 'commissions', icon: IC.cash, label: 'My earnings' },
       { to: 'receipts', icon: IC.receipt, label: 'Receipts' },
+      { to: 'email', icon: IC.mail, label: 'Email' },
     ],
     delivery: [
       { to: 'route', icon: IC.route, label: 'Smart route' },
       { to: 'deliveries', icon: IC.truck, label: 'All deliveries' },
       { to: 'vehicle-logs', icon: IC.route, label: 'My travel log' },
       { to: 'receipts', icon: IC.receipt, label: 'Scan receipt' },
+      { to: 'email', icon: IC.mail, label: 'Email' },
     ],
     employee: [
       { to: 'profile', icon: IC.users, label: 'My profile' },
+      { to: 'email', icon: IC.mail, label: 'Email' },
     ],
     labour: [
       { to: 'production', icon: IC.stack, label: 'Log production' },
+      { to: 'email', icon: IC.mail, label: 'Email' },
     ],
     customer: [
       { to: 'home', icon: IC.drop, label: 'Shop' },
@@ -3199,20 +3285,20 @@ const VIEW = {
     customers: viewCustomers,
     agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
-    products: viewProducts, backups: viewBackups,
+    products: viewProducts, backups: viewBackups, email: viewMyEmail,
   },
   manager: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,
     route: viewSmartRoute, 'vehicle-logs': viewVehicleLogs, production: viewProductionAdmin,
     offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
-    products: viewProducts, backups: viewBackups,
+    products: viewProducts, backups: viewBackups, email: viewMyEmail,
   },
-  finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents },
-  agent: { dashboard: viewAgentDashboard, orders: viewOrders, customers: viewAgentCustomers, commissions: viewCommissions, receipts: viewReceipts },
-  delivery: { route: viewSmartRoute, deliveries: viewDeliveries, 'vehicle-logs': viewVehicleLogMine, receipts: viewReceipts },
-  shop_manager: { orders: viewOrders, deliveries: viewDeliveries },
-  employee: { profile: viewProfile, orders: viewOrders },
-  labour: { production: viewProductionLog },
+  finance: { dashboard: viewFinanceDashboard, bookkeeping: viewBookkeeping, orders: viewOrders, receipts: viewReceipts, payroll: viewPayroll, agents: viewAgents, email: viewMyEmail },
+  agent: { dashboard: viewAgentDashboard, orders: viewOrders, customers: viewAgentCustomers, commissions: viewCommissions, receipts: viewReceipts, email: viewMyEmail },
+  delivery: { route: viewSmartRoute, deliveries: viewDeliveries, 'vehicle-logs': viewVehicleLogMine, receipts: viewReceipts, email: viewMyEmail },
+  shop_manager: { orders: viewOrders, deliveries: viewDeliveries, email: viewMyEmail },
+  employee: { profile: viewProfile, orders: viewOrders, email: viewMyEmail },
+  labour: { production: viewProductionLog, email: viewMyEmail },
   customer: { home: viewCustomerHome, orders: viewOrders, profile: viewCustomerProfile },
 };

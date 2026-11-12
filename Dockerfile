@@ -3,6 +3,10 @@
 FROM node:22-slim
 
 WORKDIR /app
+# install deps first (own layer, only rebuilds when package*.json changes)
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
 # copy both trees the server needs: server/ (backend) and web/ (static UI)
 COPY server/ ./server/
 COPY web/    ./web/

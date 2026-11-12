@@ -94,6 +94,22 @@ function migrate(db) {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- one connected company-mailbox (@purepak.com.pk) per PurePak user, so
+  -- staff can read their real email inside this app instead of needing a
+  -- separate webmail login. password_enc is AES-256-GCM, never plaintext,
+  -- never returned by the API — only used server-side to open an IMAP
+  -- session on the user's behalf.
+  CREATE TABLE IF NOT EXISTS mailboxes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    imap_host TEXT NOT NULL DEFAULT 'mail.purepak.com.pk',
+    imap_port INTEGER NOT NULL DEFAULT 993,
+    password_enc TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -766,7 +782,7 @@ function factoryReset(db) {
   if (process.env.PUREPAK_FACTORY_RESET !== '1') return false;
   const tables = [
     'order_items', 'deliveries', 'vehicle_logs', 'vehicles', 'commissions', 'device_tokens', 'payroll',
-    'production_entries', 'password_resets', 'notifications', 'agent_prices',
+    'production_entries', 'password_resets', 'notifications', 'agent_prices', 'mailboxes',
     'orders', 'users', 'agents', 'customers', 'ledger', 'audit_log', 'receipts', 'offers',
   ];
   // node:sqlite's DatabaseSync has no .transaction() helper (that's a

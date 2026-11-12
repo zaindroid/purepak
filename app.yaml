@@ -10,3 +10,7 @@ persistent_storage:
 env:
   PUREPAK_DATA_DIR:
     required: true
+  # AES-256-GCM key (32 bytes) encrypting employees' connected mailbox
+  # passwords at rest — generated once by the platform, never typed by hand.
+  PUREPAK_MAILBOX_KEY:
+    generate: hex

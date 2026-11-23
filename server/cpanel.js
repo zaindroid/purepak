@@ -20,11 +20,19 @@ function shQuote(s) {
 let keyPath = null;
 function ensureKeyFile() {
   if (keyPath) return keyPath;
-  const pem = process.env.PUREPAK_CPANEL_SSH_KEY || '';
-  if (!pem) throw new Error('PUREPAK_CPANEL_SSH_KEY not configured');
-  // env vars don't reliably round-trip real newlines through every UI, so a
-  // literal "\n"-escaped key is also accepted and unescaped here.
-  const normalized = pem.includes('\\n') && !pem.includes('\n') ? pem.replace(/\\n/g, '\n') : pem;
+  const raw = process.env.PUREPAK_CPANEL_SSH_KEY || '';
+  if (!raw) throw new Error('PUREPAK_CPANEL_SSH_KEY not configured');
+  // stored as single-line base64 (not raw PEM): the platform bakes every
+  // declared env var into the Dockerfile as a build ARG, and a multi-line
+  // value there breaks the Dockerfile's syntax — base64 keeps it one line.
+  // A literal PEM value (starts with "-----BEGIN") is still accepted too,
+  // for local/manual use outside that build pipeline.
+  let normalized;
+  if (raw.trimStart().startsWith('-----BEGIN')) {
+    normalized = raw.includes('\\n') && !raw.includes('\n') ? raw.replace(/\\n/g, '\n') : raw;
+  } else {
+    normalized = Buffer.from(raw, 'base64').toString('utf8');
+  }
   const p = path.join(os.tmpdir(), 'purepak-cpanel-key');
   fs.writeFileSync(p, normalized.endsWith('\n') ? normalized : normalized + '\n', { mode: 0o600 });
   keyPath = p;

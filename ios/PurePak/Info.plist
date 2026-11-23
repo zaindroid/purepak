@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>PurePak</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+
+	<!-- built-in, code-drawn splash (ViewController.setupSplash) covers the
+	     branded screen; this just satisfies the system's launch-screen
+	     requirement with a blank one shown for the instant before that -->
+	<key>UILaunchScreen</key>
+	<dict/>
+
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+
+	<key>NSCameraUsageDescription</key>
+	<string>PurePak uses your camera to scan payment receipts.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PurePak needs access to your photos to attach a receipt image.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>PurePak uses your location to optimise delivery routes for riders.</string>
+
+	<!-- TODO (see ios/README.md): replace YOUR_IOS_REVERSED_CLIENT_ID below
+	     once an iOS OAuth client exists in Google Cloud Console for
+	     com.purepak.app — Google Sign-In's URL callback won't complete
+	     without it. Everything else in the app works without this. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>YOUR_IOS_REVERSED_CLIENT_ID</string>
+			</array>
+		</dict>
+	</array>
+
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>

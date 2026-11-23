@@ -139,7 +139,7 @@ async function sendPush(userIds, title, body, data = {}) {
   if (!sa) return;
   const ids = [...new Set((userIds || []).filter(Boolean))];
   if (!ids.length) return;
-  const rows = db.prepare(`SELECT token FROM device_tokens WHERE user_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+  const rows = db.prepare(`SELECT token, platform FROM device_tokens WHERE user_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
   if (!rows.length) return;
   let accessToken;
   try { accessToken = await getFcmAccessToken(); } catch (e) { console.error('FCM auth failed:', e.message); return; }
@@ -149,13 +149,24 @@ async function sendPush(userIds, title, body, data = {}) {
   // code entirely, so a tap couldn't carry the "ref" needed to deep-link into
   // the right screen. Sending everything as data means our own Android
   // service always builds the notification and always gets to attach that.
+  // iOS doesn't reliably wake the app for a data-only push the way Android
+  // does, so iOS tokens additionally get a real apns.payload.aps.alert block
+  // — the system displays that natively, and the same "ref" still rides
+  // along in the top-level data for the app to read on tap.
   const strData = Object.fromEntries(Object.entries({ ...data, title, body }).map(([k, v]) => [k, String(v)]));
-  for (const { token } of rows) {
+  for (const { token, platform } of rows) {
     try {
+      const message = { token, data: strData };
+      if (platform === 'ios') {
+        message.apns = {
+          headers: { 'apns-priority': '10', 'apns-push-type': 'alert' },
+          payload: { aps: { alert: { title, body }, sound: 'default', 'mutable-content': 1 } },
+        };
+      }
       const resp = await fetch(`https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + accessToken },
-        body: JSON.stringify({ message: { token, data: strData } }),
+        body: JSON.stringify({ message }),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));

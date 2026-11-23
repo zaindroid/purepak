@@ -1,0 +1,45 @@
+name: PurePak
+options:
+  bundleIdPrefix: com.purepak
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: 88VWT2K3LJ
+    SWIFT_VERSION: "5.0"
+packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: 10.29.0
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 7.1.0
+targets:
+  PurePak:
+    type: application
+    platform: iOS
+    sources:
+      - path: PurePak
+        excludes:
+          - "*.p8"
+          - GoogleService-Info.plist
+    resources:
+      # pulled in by CI from a secret, or dropped in locally — see README.md
+      - path: PurePak/GoogleService-Info.plist
+        optional: true
+    info:
+      path: PurePak/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.purepak.app
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1" # iPhone only for v1
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Apple Distribution"
+        PROVISIONING_PROFILE_SPECIFIER: "PurePak App Store"
+    dependencies:
+      - package: Firebase
+        product: FirebaseMessaging
+      - package: GoogleSignIn
+        product: GoogleSignIn

@@ -1404,8 +1404,8 @@ async function handleApi(req, res, url) {
       LEFT JOIN customers c ON c.id = u.customer_id
       ORDER BY u.role, u.name`).all();
     // the break-glass master account is dev-only — it never appears in Team
-    // or any other staff list the business sees, even to other admins.
-    const visible = isMasterAccount(user) ? rows : rows.filter(u => !isMasterAccount(u));
+    // or any other staff list, for anyone, including itself.
+    const visible = rows.filter(u => !isMasterAccount(u));
     return json(res, 200, visible.map(userView).map(u => ({ ...u,
       agentName: u.agentName, customerName: u.customerName })));
   }

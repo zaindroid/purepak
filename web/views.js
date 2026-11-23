@@ -2421,8 +2421,8 @@ async function viewTeam() {
     <div class="card" style="padding:14px 16px;max-width:520px">
       <div class="card-head"><h2 style="font-size:14px;margin:0">Add a company mailbox</h2></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 10px">
-        <input id="cmbEmail" class="input" placeholder="hello@purepak.com.pk">
-        <input id="cmbPassword" class="input" type="password" placeholder="Mailbox password">
+        <input id="cmbEmail" class="input" placeholder="hello@purepak.com.pk" autocomplete="off">
+        <input id="cmbPassword" class="input" type="password" placeholder="Mailbox password" autocomplete="new-password">
       </div>
       <select id="cmbAssign" class="input" style="width:100%;margin-bottom:10px">
         <option value="">Leave unassigned for now</option>

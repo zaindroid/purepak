@@ -943,24 +943,8 @@ async function viewMyEmail() {
     return `
     <div class="page-head"><h1>Email</h1></div>
     <div class="card" style="margin-top:14px;padding:20px;max-width:480px">
-      <h2 style="margin:0 0 6px">Connect your company email</h2>
-      <p class="muted" style="font-size:13px;margin:0 0 16px">Sign in with your @purepak.com.pk address to read it right here. Your password is encrypted and only ever used to fetch your mail.</p>
-      <label class="muted">Email address</label>
-      <input id="mbEmail" class="input" style="width:100%;margin:4px 0 10px" placeholder="yourname@purepak.com.pk">
-      <label class="muted">Password</label>
-      <input id="mbPassword" class="input" type="password" style="width:100%;margin:4px 0 14px" placeholder="Your mailbox password">
-      <button class="btn primary" id="mbConnectBtn" data-act="connect-mailbox" style="width:100%">Connect</button>
-    </div>
-    <div class="card" style="margin-top:14px;padding:16px;max-width:480px">
-      <div class="card-head"><h2 style="font-size:14px">Prefer your own Gmail or Outlook app?</h2></div>
-      <p class="muted" style="font-size:12.5px;margin:0 0 10px">Add your @purepak.com.pk account there instead, using these settings:</p>
-      <div style="font-size:12.5px;display:grid;gap:4px;font-family:monospace">
-        <div>IMAP host: mail.purepak.com.pk</div>
-        <div>IMAP port: 993 (SSL)</div>
-        <div>SMTP host: mail.purepak.com.pk (likely — check with IT if sending fails)</div>
-        <div>SMTP port: 465 (SSL)</div>
-        <div>Username: your full @purepak.com.pk address</div>
-      </div>
+      <h2 style="margin:0 0 6px">No mailbox assigned yet</h2>
+      <p class="muted" style="font-size:13px;margin:0">Ask your admin to assign you a @purepak.com.pk mailbox from Team → Company mailboxes. Once assigned, it shows up here automatically.</p>
     </div>`;
   }
   const messages = await API.mailboxMessages().catch(() => []);
@@ -973,12 +957,9 @@ async function viewMyEmail() {
   </div>`;
   return `
   <div class="page-head"><h1>Email</h1>
-    <div style="display:flex;gap:8px">
-      <button class="btn sm ghost" data-act="refresh-mail">Refresh</button>
-      <button class="btn sm ghost" data-act="disconnect-mailbox">Disconnect</button>
-    </div>
+    <button class="btn sm ghost" data-act="refresh-mail">Refresh</button>
   </div>
-  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Signed in as ${API.esc(status.email)}</p>
+  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Assigned mailbox: ${API.esc(status.email)}</p>
   ${messages.map(row).join('') || '<div class="card card-pad empty">Inbox is empty.</div>'}`;
 }
 // Email content is from untrusted senders, never raw-injected: the subject
@@ -2378,7 +2359,7 @@ function modalConfirmScan(rec, kind) {
 async function viewTeam() {
   const u = API.user;
   const isRoot = u.role === 'admin';
-  const all = await API.users();
+  const [all, mailboxes] = await Promise.all([API.users(), API.mailboxes().catch(() => [])]);
   const agents = all.filter(r => r.role === 'agent');
   // Team = employees only. Customers have their own page; agents are shown as a
   // summary chip strip below (managed in Agents & commissions).
@@ -2409,11 +2390,51 @@ async function viewTeam() {
         ${agents.map(a => `<span class="chip ${a.status === 'pending' ? 'pending' : a.status === 'disabled' ? 'cancelled' : 'agent'}" style="text-transform:none;letter-spacing:0;font-weight:600">${API.esc(a.name)}</span>`).join('') || '<span class="muted" style="font-size:12.5px">No agents yet</span>'}
       </div>
       <button class="btn sm" data-act="nav" data-to="agents">Open agents &amp; commissions →</button>
-    </div>` : ''}`;
+    </div>` : ''}
+    ${mailboxesSectionHtml()}`;
+
+  function mailboxesSectionHtml() {
+    const staff = all.filter(r => r.role !== 'customer' && r.status !== 'disabled');
+    const assignedIds = new Set(mailboxes.map(m => m.assigned_user_id).filter(Boolean));
+    const mbRow = (m) => `<div class="team-row">
+      <div class="team-av">${IC.mail}</div>
+      <div class="team-main">
+        <div class="nm">${API.esc(m.email)}</div>
+        <div class="sub">${m.assigned_name ? 'Assigned to ' + API.esc(m.assigned_name) : 'Unassigned'}</div>
+      </div>
+      <div class="team-foot">
+        <span></span>
+        <div class="team-acts" style="display:flex;gap:6px;align-items:center">
+          <select id="mbAssign-${m.id}" class="input sm">
+            <option value="">Unassigned</option>
+            ${staff.map(s => `<option value="${s.id}" ${s.id === m.assigned_user_id ? 'selected' : ''} ${assignedIds.has(s.id) && s.id !== m.assigned_user_id ? 'disabled' : ''}>${API.esc(s.name)}</option>`).join('')}
+          </select>
+          <button class="btn ghost sm" data-act="assign-mailbox" data-id="${m.id}">Save</button>
+          <button class="btn ghost sm" data-act="delete-mailbox" data-id="${m.id}">Remove</button>
+        </div>
+      </div>
+    </div>`;
+    return `
+    <div class="sec-t">Company mailboxes — ${mailboxes.length}</div>
+    <p class="muted" style="font-size:12.5px;margin:-4px 0 10px">Set up a @purepak.com.pk mailbox once, then assign it to whoever should see it under their own "Email" tab — their password is never shared with them.</p>
+    ${mailboxes.map(mbRow).join('') || '<div class="empty" style="margin-bottom:10px">No company mailboxes added yet.</div>'}
+    <div class="card" style="padding:14px 16px;max-width:520px">
+      <div class="card-head"><h2 style="font-size:14px;margin:0">Add a company mailbox</h2></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 10px">
+        <input id="cmbEmail" class="input" placeholder="hello@purepak.com.pk">
+        <input id="cmbPassword" class="input" type="password" placeholder="Mailbox password">
+      </div>
+      <select id="cmbAssign" class="input" style="width:100%;margin-bottom:10px">
+        <option value="">Leave unassigned for now</option>
+        ${staff.filter(s => !assignedIds.has(s.id)).map(s => `<option value="${s.id}">${API.esc(s.name)}</option>`).join('')}
+      </select>
+      <button class="btn primary sm" data-act="add-mailbox">Add mailbox</button>
+    </div>`;
+  }
 
   function teamRowHtml(r) {
     const sub = [r.agentName && 'Agent: ' + r.agentName, r.customerName && 'Customer: ' + r.customerName,
-      r.email, r.last_login_at ? 'last in ' + API.fmtDay(r.last_login_at) : 'never signed in'].filter(Boolean).join(' · ');
+      r.username ? '@' + r.username : r.email, r.last_login_at ? 'last in ' + API.fmtDay(r.last_login_at) : 'never signed in'].filter(Boolean).join(' · ');
     const canTouch = !(r.role === 'admin' && !isRoot) && !(r.role === 'manager' && !isRoot) && !(r.id === u.id && r.status === 'active' && r.role === 'admin');
     const acts = [];
     if (r.status === 'pending') acts.push(`<button class="btn primary sm" data-act="team-activate" data-id="${r.id}">Activate</button>`);
@@ -2448,10 +2469,13 @@ function modalAddEmployee() {
     <div class="modal-bd">
       <label class="muted">Full name</label>
       <input id="empName" class="input" style="width:100%;margin-bottom:10px" placeholder="e.g. Kamran Ali">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-        <div><label class="muted">Email</label><input id="empEmail" class="input" style="width:100%" type="email" placeholder="name@purepak.pk"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px">
+        <div><label class="muted">Username</label><input id="empUsername" class="input" style="width:100%" placeholder="e.g. kamran.ali"></div>
         <div><label class="muted">Phone</label><input id="empPhone" class="input" style="width:100%" placeholder="03xx-xxxxxxx"></div>
       </div>
+      <label class="muted">Email (optional)</label>
+      <input id="empEmail" class="input" style="width:100%;margin-bottom:10px" type="email" placeholder="name@purepak.pk — leave blank if none">
+      <p class="muted" style="font-size:11.5px;margin:-6px 0 10px">They'll sign in with the username (or email, if set) and the password below.</p>
       <label class="muted">Role</label>
       <select id="empRole" class="input" style="width:100%;margin-bottom:10px">
         ${roles.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}
@@ -2475,6 +2499,7 @@ function modalAddEmployee() {
   document.getElementById('empSubmit').addEventListener('click', async () => {
     const b = {
       name: document.getElementById('empName').value.trim(),
+      username: document.getElementById('empUsername').value.trim(),
       email: document.getElementById('empEmail').value.trim(),
       phone: document.getElementById('empPhone').value.trim() || null,
       role: roleSel.value,
@@ -2482,6 +2507,7 @@ function modalAddEmployee() {
       salary: roleSel.value === 'agent' ? null : (document.getElementById('empSalary').value || null),
     };
     if (b.name.length < 2 || !b.password) { toast('Fill in name and password', 'warn'); return; }
+    if (!b.username && !b.email) { toast('Enter a username or email', 'warn'); return; }
     try {
       await API.createUser(b);
       closeModal();
@@ -2507,6 +2533,8 @@ function modalEditEmployee(id) {
       <div class="modal-bd">
         <label class="muted">Name</label>
         <input id="emName" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(r.name)}">
+        <label class="muted">Username</label>
+        <input id="emUsername" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(r.username || '')}" placeholder="e.g. kamran.ali">
         <label class="muted">Role</label>
         <select id="emRole" class="input" style="width:100%;margin-bottom:10px" ${protectedTarget ? 'disabled' : ''}>
           ${roles.map(([k, l]) => `<option value="${k}" ${k === r.role ? 'selected' : ''}>${l}</option>`).join('')}
@@ -2529,6 +2557,7 @@ function modalEditEmployee(id) {
     document.getElementById('emSave').addEventListener('click', async () => {
       const b = {
         name: document.getElementById('emName').value.trim(),
+        username: document.getElementById('emUsername').value.trim(),
         role: emRole.value,
         salary: emRole.value === 'agent' ? null : (document.getElementById('emSalary').value === '' ? null : Number(document.getElementById('emSalary').value)),
       };

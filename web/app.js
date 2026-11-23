@@ -305,12 +305,12 @@ const App = {
 
   async doLogin(e) {
     e.preventDefault();
-    const email = document.getElementById('loginEmail').value.trim();
+    const identifier = document.getElementById('loginEmail').value.trim();
     const pass = document.getElementById('loginPass').value;
     const errEl = document.getElementById('loginErr');
     errEl.textContent = '';
     try {
-      const r = await API.login(email, pass);
+      const r = await API.login(identifier, pass);
       API.setAuth(r.token, r.user);
       if (r.pending) this.showPending(r.user);
       else this.enter(r.user);
@@ -796,26 +796,39 @@ const App = {
         } catch (e) { this.toast(e.message, 'err'); }
         break;
       }
-      case 'connect-mailbox': stop(); {
-        const email = document.getElementById('mbEmail').value.trim();
-        const password = document.getElementById('mbPassword').value;
-        if (!email || !password) { this.toast('Enter your email and password', 'warn'); return; }
-        const btn = document.getElementById('mbConnectBtn');
-        btn.disabled = true; btn.textContent = 'Connecting…';
+      case 'add-mailbox': stop(); {
+        const email = document.getElementById('cmbEmail').value.trim();
+        const password = document.getElementById('cmbPassword').value;
+        const assignSel = document.getElementById('cmbAssign');
+        const assigned_user_id = assignSel && assignSel.value ? +assignSel.value : null;
+        if (!email || !password) { this.toast('Enter the mailbox address and password', 'warn'); return; }
+        const btn = ev.target.closest('[data-act]');
+        btn.disabled = true; btn.textContent = 'Adding…';
         try {
-          await API.connectMailbox(email, password);
-          this.toast('Mailbox connected');
+          await API.createMailbox({ email, password, assigned_user_id });
+          this.toast('Mailbox added');
           this.refresh();
         } catch (e) {
           this.toast(e.message, 'err');
-          btn.disabled = false; btn.textContent = 'Connect';
+          btn.disabled = false; btn.textContent = 'Add mailbox';
         }
         break;
       }
-      case 'disconnect-mailbox': stop(); {
+      case 'assign-mailbox': stop(); {
+        const sel = document.getElementById('mbAssign-' + id);
+        const assigned_user_id = sel && sel.value ? +sel.value : null;
         try {
-          await API.disconnectMailbox();
-          this.toast('Mailbox disconnected');
+          await API.updateMailbox(+id, { assigned_user_id });
+          this.toast('Mailbox assignment updated');
+          this.refresh();
+        } catch (e) { this.toast(e.message, 'err'); }
+        break;
+      }
+      case 'delete-mailbox': stop(); {
+        if (!await confirmDialog({ title: 'Remove mailbox', message: 'This removes the saved mailbox and its password. It can be added again later.', okLabel: 'Remove', danger: true })) break;
+        try {
+          await API.deleteMailbox(+id);
+          this.toast('Mailbox removed');
           this.refresh();
         } catch (e) { this.toast(e.message, 'err'); }
         break;

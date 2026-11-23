@@ -440,14 +440,14 @@ function newSession(user) {
 function realUserCount() {
   const masterEmail = (process.env.PUREPAK_MASTER_EMAIL || '').trim().toLowerCase();
   if (!masterEmail) return db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  return db.prepare('SELECT COUNT(*) AS c FROM users WHERE email<>?').get(masterEmail).c;
+  return db.prepare('SELECT COUNT(*) AS c FROM users WHERE email IS NULL OR email<>?').get(masterEmail).c;
 }
 
 function userView(u) {
   const agent = u.agent_id ? db.prepare('SELECT name, commission_pct FROM agents WHERE id=?').get(u.agent_id) : null;
   const cust = u.customer_id ? db.prepare('SELECT name, type, phone, address, area, contact_name, lat, lng FROM customers WHERE id=?').get(u.customer_id) : null;
   return {
-    id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role,
+    id: u.id, name: u.name, username: u.username, email: u.email, phone: u.phone, role: u.role,
     agent_id: u.agent_id, customer_id: u.customer_id,
     agentName: agent ? agent.name : null,
     // lets an agent estimate their own margin per line while building an
@@ -1015,9 +1015,13 @@ async function handleApi(req, res, url) {
   // Public: login + signup + me (me needs token but is fine)
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'login') {
     const b = await readBody(req);
-    const u = db.prepare(`SELECT * FROM users WHERE email=? AND active=1`).get(String(b.email || '').trim().toLowerCase());
+    // the single login field doubles as email or username — customers and
+    // older staff accounts still use email, newer staff accounts (added by
+    // an admin without a personal email) sign in with a username instead.
+    const identifier = String(b.identifier ?? b.email ?? '').trim().toLowerCase();
+    const u = db.prepare(`SELECT * FROM users WHERE (email=? OR username=?) AND active=1`).get(identifier, identifier);
     if (!u || !verifyPassword(String(b.password || ''), u.password_hash))
-      return err(res, 401, 'Invalid email or password');
+      return err(res, 401, 'Invalid username/email or password');
     if (u.status === 'disabled') return err(res, 401, 'Account disabled — contact your manager');
     if (u.status === 'pending') {
       // allow the pending staff member to log in and see the activation screen
@@ -1400,12 +1404,17 @@ async function handleApi(req, res, url) {
     if (!canManage) return err(res, 403, 'Forbidden');
     const b = await readBody(req);
     const name = String(b.name || '').trim();
+    const username = String(b.username || '').trim().toLowerCase();
     const email = String(b.email || '').trim().toLowerCase();
     const phone = String(b.phone || '').trim() || null;
     const password = String(b.password || '');
     let role = ['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer', 'labour'].includes(b.role) ? b.role : null;
     if (name.length < 2) return err(res, 400, 'Please enter a name');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(res, 400, 'Please enter a valid email');
+    // a username is the normal way to add staff without a personal email;
+    // customers always sign up with an email, so require at least one here.
+    if (!username && !email) return err(res, 400, 'Enter a username or email');
+    if (username && !/^[a-z0-9_.]{3,20}$/.test(username)) return err(res, 400, 'Username must be 3–20 characters: letters, numbers, dot or underscore');
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err(res, 400, 'Please enter a valid email');
     if (!role) return err(res, 400, 'Please choose a role');
     if (user.role !== 'admin' && (role === 'admin' || role === 'manager'))
       return err(res, 403, 'Only an admin can create admin/manager accounts');
@@ -1414,7 +1423,7 @@ async function handleApi(req, res, url) {
     // until the manager/admin activates them from Team.
     const status = role === 'customer' ? 'active' : 'pending';
 
-    const existing = db.prepare('SELECT * FROM users WHERE email=?').get(email);
+    const existing = email ? db.prepare('SELECT * FROM users WHERE email=?').get(email) : null;
     if (existing) {
       // not a new account — reassigning this email's existing account to a
       // different role (e.g. a self-registered customer the business wants
@@ -1424,6 +1433,10 @@ async function handleApi(req, res, url) {
       // here — leave it blank to keep whatever they already had.
       if (user.role !== 'admin') return err(res, 403, 'Only an admin can reassign an existing account to a different role');
       if (password && password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
+      if (username && username !== existing.username) {
+        const usernameTaken = db.prepare('SELECT id FROM users WHERE username=? AND id<>?').get(username, existing.id);
+        if (usernameTaken) return err(res, 400, 'That username is already taken');
+      }
       let agentId = existing.agent_id, custId = existing.customer_id;
       if (role === 'agent' && !agentId) {
         agentId = Number(db.prepare('INSERT INTO agents(name,phone,commission_pct) VALUES (?,?,5)').run(name, phone).lastInsertRowid);
@@ -1431,8 +1444,8 @@ async function handleApi(req, res, url) {
       if (role === 'customer' && !custId) {
         custId = Number(db.prepare('INSERT INTO customers(name,phone,type) VALUES (?,?,?)').run(name, phone || '', 'retail').lastInsertRowid);
       }
-      db.prepare(`UPDATE users SET name=?, phone=?, password_hash=?, role=?, salary=?, agent_id=?, customer_id=?, status=? WHERE id=?`)
-        .run(name, phone, password ? hashPassword(password) : existing.password_hash, role, salary,
+      db.prepare(`UPDATE users SET name=?, username=?, phone=?, password_hash=?, role=?, salary=?, agent_id=?, customer_id=?, status=? WHERE id=?`)
+        .run(name, username || existing.username, phone, password ? hashPassword(password) : existing.password_hash, role, salary,
           role === 'agent' ? agentId : null, role === 'customer' ? custId : null, status, existing.id);
       const u = db.prepare('SELECT * FROM users WHERE id=?').get(existing.id);
       audit(user, 'user.reassign', 'user', existing.id,
@@ -1443,6 +1456,10 @@ async function handleApi(req, res, url) {
     }
 
     if (password.length < 6) return err(res, 400, 'Password must be at least 6 characters');
+    if (username && db.prepare('SELECT id FROM users WHERE username=?').get(username))
+      return err(res, 400, 'That username is already taken');
+    if (email && db.prepare('SELECT id FROM users WHERE email=?').get(email))
+      return err(res, 400, 'That email is already registered');
     let agentId = null, custId = null;
     if (role === 'agent') {
       const ar = db.prepare('INSERT INTO agents(name,phone,commission_pct) VALUES (?,?,5)').run(name, phone);
@@ -1452,9 +1469,9 @@ async function handleApi(req, res, url) {
       const cr = db.prepare('INSERT INTO customers(name,phone,type) VALUES (?,?,?)').run(name, phone || '', 'retail');
       custId = Number(cr.lastInsertRowid);
     }
-    const ur = db.prepare(`INSERT INTO users(name,email,phone,password_hash,role,salary,agent_id,customer_id,status)
-                            VALUES (?,?,?,?,?,?,?,?,?)`)
-      .run(name, email, phone, hashPassword(password), role, salary, agentId, custId, status);
+    const ur = db.prepare(`INSERT INTO users(name,username,email,phone,password_hash,role,salary,agent_id,customer_id,status)
+                            VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(name, username || null, email || null, phone, hashPassword(password), role, salary, agentId, custId, status);
     const u = db.prepare('SELECT * FROM users WHERE id=?').get(Number(ur.lastInsertRowid));
     notify(staffUserIds().filter(x => x !== user.id), 'team', 'New employee added',
       name + ' added as ' + role + ' by ' + user.name + '.' + (status === 'pending' ? ' Activate them from Team.' : ''), 'user#' + u.id);
@@ -1467,7 +1484,18 @@ async function handleApi(req, res, url) {
     if (!cur) return err(res, 404, 'User not found');
     const b = await readBody(req);
     const changes = [];
-    let role = cur.role, salary = cur.salary, status = cur.status, phone = cur.phone, name = cur.name;
+    let role = cur.role, salary = cur.salary, status = cur.status, phone = cur.phone, name = cur.name, username = cur.username;
+    if (b.username !== undefined) {
+      const nextUsername = String(b.username || '').trim().toLowerCase() || null;
+      if (nextUsername !== cur.username) {
+        if (nextUsername && !/^[a-z0-9_.]{3,20}$/.test(nextUsername))
+          return err(res, 400, 'Username must be 3–20 characters: letters, numbers, dot or underscore');
+        if (!nextUsername && !cur.email) return err(res, 400, 'This account has no email — it needs a username to sign in');
+        if (nextUsername && db.prepare('SELECT id FROM users WHERE username=? AND id<>?').get(nextUsername, id))
+          return err(res, 400, 'That username is already taken');
+        username = nextUsername; changes.push('username ' + (cur.username || '—') + ' → ' + (username || '—'));
+      }
+    }
     if (b.role !== undefined && b.role !== cur.role) {
       if (!['admin', 'manager', 'shop_manager', 'finance', 'delivery', 'employee', 'agent', 'customer', 'labour'].includes(b.role))
         return err(res, 400, 'Invalid role');
@@ -1492,10 +1520,10 @@ async function handleApi(req, res, url) {
     }
     if (b.phone !== undefined) phone = String(b.phone || '').trim() || null;
     if (b.name !== undefined && String(b.name).trim().length >= 2) name = String(b.name).trim();
-    db.prepare('UPDATE users SET role=?, salary=?, status=?, phone=?, name=? WHERE id=?')
-      .run(role, salary, status, phone, name, id);
+    db.prepare('UPDATE users SET role=?, salary=?, status=?, phone=?, name=?, username=? WHERE id=?')
+      .run(role, salary, status, phone, name, username, id);
     // keep session in sync for the target user
-    if (cur.id === user.id) { user.role = role; user.salary = salary; user.status = status; user.name = name; user.phone = phone; }
+    if (cur.id === user.id) { user.role = role; user.salary = salary; user.status = status; user.name = name; user.phone = phone; user.username = username; }
     if (changes.length) {
       notify([cur.id, ...staffUserIds()].filter(x => x !== user.id), 'team',
         'Employee updated: ' + name, name + ' — ' + changes.join(', ') + ' (by ' + user.name + ').', 'user#' + id);
@@ -2581,41 +2609,100 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true });
   }
 
-  // ---- company mailbox (read-your-own @purepak.com.pk inbox in-app) ----
-  if (method === 'GET' && parts[1] === 'mailbox' && parts.length === 2) {
-    if (!user) return err(res, 401, 'Not authenticated');
-    const mb = db.prepare('SELECT email FROM mailboxes WHERE user_id=?').get(user.id);
-    return json(res, 200, { connected: !!mb, email: mb ? mb.email : null });
+  // ---- company mailboxes: admin sets one up once and assigns it to a
+  // staff member, who then reads it in-app under "My Email" ----
+  if (method === 'GET' && parts[1] === 'mailboxes' && parts.length === 2) {
+    if (!canManage) return err(res, 403, 'Forbidden');
+    const rows = db.prepare(`
+      SELECT m.id, m.email, m.assigned_user_id, u.name AS assigned_name
+      FROM mailboxes m LEFT JOIN users u ON u.id = m.assigned_user_id
+      ORDER BY m.email`).all();
+    return json(res, 200, rows);
   }
-  if (method === 'POST' && parts[1] === 'mailbox' && parts.length === 2) {
-    if (!user) return err(res, 401, 'Not authenticated');
+  if (method === 'POST' && parts[1] === 'mailboxes' && parts.length === 2) {
+    if (!canManage) return err(res, 403, 'Forbidden');
     const b = await readBody(req);
     const email = String(b.email || '').trim().toLowerCase();
     const password = String(b.password || '');
-    if (!/^[^\s@]+@purepak\.com\.pk$/.test(email)) return err(res, 400, 'Enter your @purepak.com.pk address');
-    if (!password) return err(res, 400, 'Enter your mailbox password');
+    if (!/^[^\s@]+@purepak\.com\.pk$/.test(email)) return err(res, 400, 'Enter a @purepak.com.pk address');
+    if (!password) return err(res, 400, 'Enter the mailbox password');
+    if (db.prepare('SELECT id FROM mailboxes WHERE email=?').get(email)) return err(res, 400, 'That mailbox is already added');
     const row = { email, imap_host: 'mail.purepak.com.pk', imap_port: 993, password_enc: mail.encryptPassword(password) };
     try {
       await mail.verifyMailbox(row);
     } catch (e) {
       return err(res, 400, 'Could not sign in to that mailbox — check the address and password');
     }
-    db.prepare(`INSERT INTO mailboxes(user_id,email,imap_host,imap_port,password_enc,updated_at) VALUES (?,?,?,?,?,datetime('now'))
-                ON CONFLICT(user_id) DO UPDATE SET email=excluded.email, password_enc=excluded.password_enc, updated_at=datetime('now')`)
-      .run(user.id, row.email, row.imap_host, row.imap_port, row.password_enc);
-    audit(user, 'mailbox.connect', 'mailbox', user.id, `Connected ${email}`, null, { email });
-    return json(res, 200, { connected: true, email });
+    let assignedUserId = null;
+    if (b.assigned_user_id) {
+      if (!db.prepare('SELECT id FROM users WHERE id=?').get(+b.assigned_user_id)) return err(res, 400, 'That employee was not found');
+      if (db.prepare('SELECT id FROM mailboxes WHERE assigned_user_id=?').get(+b.assigned_user_id))
+        return err(res, 400, 'That employee is already assigned another mailbox');
+      assignedUserId = +b.assigned_user_id;
+    }
+    const r = db.prepare(`INSERT INTO mailboxes(email,imap_host,imap_port,password_enc,assigned_user_id) VALUES (?,?,?,?,?)`)
+      .run(row.email, row.imap_host, row.imap_port, row.password_enc, assignedUserId);
+    const id = Number(r.lastInsertRowid);
+    audit(user, 'mailbox.create', 'mailbox', id, `Added company mailbox ${email} (by ${user.name})`, null, { email, assignedUserId });
+    if (assignedUserId) notify([assignedUserId], 'team', 'Mailbox assigned',
+      `${email} was assigned to you by ${user.name} — check My Email in your portal.`, 'mailbox#' + id);
+    return json(res, 201, { id, email, assigned_user_id: assignedUserId });
   }
-  if (method === 'DELETE' && parts[1] === 'mailbox' && parts.length === 2) {
+  if (method === 'PATCH' && parts[1] === 'mailboxes' && parts.length === 3 && !isNaN(+parts[2])) {
+    if (!canManage) return err(res, 403, 'Forbidden');
+    const id = +parts[2];
+    const mb = db.prepare('SELECT * FROM mailboxes WHERE id=?').get(id);
+    if (!mb) return err(res, 404, 'Mailbox not found');
+    const b = await readBody(req);
+    let passwordEnc = mb.password_enc;
+    if (b.password) {
+      const row = { email: mb.email, imap_host: mb.imap_host, imap_port: mb.imap_port, password_enc: mail.encryptPassword(String(b.password)) };
+      try {
+        await mail.verifyMailbox(row);
+      } catch (e) {
+        return err(res, 400, 'Could not sign in with that password');
+      }
+      passwordEnc = row.password_enc;
+    }
+    let assignedUserId = mb.assigned_user_id;
+    if (b.assigned_user_id !== undefined) {
+      if (b.assigned_user_id === null || b.assigned_user_id === '') {
+        assignedUserId = null;
+      } else {
+        if (!db.prepare('SELECT id FROM users WHERE id=?').get(+b.assigned_user_id)) return err(res, 400, 'That employee was not found');
+        const taken = db.prepare('SELECT id FROM mailboxes WHERE assigned_user_id=? AND id<>?').get(+b.assigned_user_id, id);
+        if (taken) return err(res, 400, 'That employee is already assigned another mailbox');
+        assignedUserId = +b.assigned_user_id;
+      }
+    }
+    db.prepare(`UPDATE mailboxes SET password_enc=?, assigned_user_id=?, updated_at=datetime('now') WHERE id=?`)
+      .run(passwordEnc, assignedUserId, id);
+    audit(user, 'mailbox.update', 'mailbox', id, `Updated mailbox ${mb.email} (by ${user.name})`,
+      { assigned_user_id: mb.assigned_user_id }, { assigned_user_id: assignedUserId });
+    if (assignedUserId && assignedUserId !== mb.assigned_user_id) notify([assignedUserId], 'team', 'Mailbox assigned',
+      `${mb.email} was assigned to you by ${user.name} — check My Email in your portal.`, 'mailbox#' + id);
+    return json(res, 200, { id, email: mb.email, assigned_user_id: assignedUserId });
+  }
+  if (method === 'DELETE' && parts[1] === 'mailboxes' && parts.length === 3 && !isNaN(+parts[2])) {
+    if (!canManage) return err(res, 403, 'Forbidden');
+    const id = +parts[2];
+    const mb = db.prepare('SELECT * FROM mailboxes WHERE id=?').get(id);
+    if (!mb) return err(res, 404, 'Mailbox not found');
+    db.prepare('DELETE FROM mailboxes WHERE id=?').run(id);
+    audit(user, 'mailbox.delete', 'mailbox', id, `Removed company mailbox ${mb.email} (by ${user.name})`, null, null);
+    return json(res, 200, { ok: true });
+  }
+  // ---- "My Email" — a staff member's own read-only view of whichever
+  // mailbox (if any) an admin has assigned to them ----
+  if (method === 'GET' && parts[1] === 'mailbox' && parts.length === 2) {
     if (!user) return err(res, 401, 'Not authenticated');
-    db.prepare('DELETE FROM mailboxes WHERE user_id=?').run(user.id);
-    audit(user, 'mailbox.disconnect', 'mailbox', user.id, 'Disconnected mailbox', null, null);
-    return json(res, 200, { connected: false });
+    const mb = db.prepare('SELECT email FROM mailboxes WHERE assigned_user_id=?').get(user.id);
+    return json(res, 200, { connected: !!mb, email: mb ? mb.email : null });
   }
   if (method === 'GET' && parts[1] === 'mailbox' && parts[2] === 'messages' && parts.length === 3) {
     if (!user) return err(res, 401, 'Not authenticated');
-    const mb = db.prepare('SELECT * FROM mailboxes WHERE user_id=?').get(user.id);
-    if (!mb) return err(res, 404, 'No mailbox connected');
+    const mb = db.prepare('SELECT * FROM mailboxes WHERE assigned_user_id=?').get(user.id);
+    if (!mb) return err(res, 404, 'No mailbox assigned');
     if (rateLimited('mailbox-list:' + user.id, 20, 60 * 1000)) return err(res, 429, 'Too many requests — wait a moment');
     try {
       const messages = await mail.listMessages(mb, 30);
@@ -2626,8 +2713,8 @@ async function handleApi(req, res, url) {
   }
   if (method === 'GET' && parts[1] === 'mailbox' && parts[2] === 'messages' && parts.length === 4 && !isNaN(+parts[3])) {
     if (!user) return err(res, 401, 'Not authenticated');
-    const mb = db.prepare('SELECT * FROM mailboxes WHERE user_id=?').get(user.id);
-    if (!mb) return err(res, 404, 'No mailbox connected');
+    const mb = db.prepare('SELECT * FROM mailboxes WHERE assigned_user_id=?').get(user.id);
+    if (!mb) return err(res, 404, 'No mailbox assigned');
     if (rateLimited('mailbox-read:' + user.id, 30, 60 * 1000)) return err(res, 429, 'Too many requests — wait a moment');
     try {
       const message = await mail.readMessage(mb, +parts[3]);
@@ -2942,7 +3029,7 @@ const OPENAPI = {
     '/api/health': { get: { summary: 'Health (no DB)', responses: { 200: { description: 'ok' } } } },
     '/api/ready': { get: { summary: 'Readiness (checks DB)', responses: { 200: { description: 'ready' }, 503: { description: 'not ready' } } } },
     '/api/version': { get: { summary: 'Version', responses: { 200: { description: 'ok' } } } },
-    '/api/auth/login': { post: { summary: 'Login (email+password) -> token+user', responses: { 200: { description: 'ok' }, 401: { description: 'invalid credentials' } } } },
+    '/api/auth/login': { post: { summary: 'Login (username or email + password) -> token+user', responses: { 200: { description: 'ok' }, 401: { description: 'invalid credentials' } } } },
     '/api/auth/signup': { post: { summary: 'Public self-signup (first account becomes owner/admin)', responses: { 201: { description: 'created' } } } },
     '/api/orders': { get: { summary: 'List orders', responses: { 200: { description: 'ok' } } } },
     '/api/deliveries': { get: { summary: 'List deliveries', responses: { 200: { description: 'ok' } } } },

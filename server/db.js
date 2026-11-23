@@ -81,7 +81,8 @@ function migrate(db) {
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
+    username TEXT UNIQUE,
+    email TEXT UNIQUE,
     phone TEXT,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer','labour')),
@@ -91,21 +92,22 @@ function migrate(db) {
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled')),
     active INTEGER NOT NULL DEFAULT 1,
     last_login_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (username IS NOT NULL OR email IS NOT NULL)
   );
 
-  -- one connected company-mailbox (@purepak.com.pk) per PurePak user, so
-  -- staff can read their real email inside this app instead of needing a
-  -- separate webmail login. password_enc is AES-256-GCM, never plaintext,
-  -- never returned by the API — only used server-side to open an IMAP
-  -- session on the user's behalf.
+  -- a company mailbox (@purepak.com.pk) that an admin sets up once and then
+  -- assigns to at most one staff member at a time, so that person sees its
+  -- inbox inside their own portal instead of needing a separate webmail
+  -- login — the mailbox's own IMAP password is never shared with them.
+  -- password_enc is AES-256-GCM, never plaintext, never returned by the API.
   CREATE TABLE IF NOT EXISTS mailboxes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-    email TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
     imap_host TEXT NOT NULL DEFAULT 'mail.purepak.com.pk',
     imap_port INTEGER NOT NULL DEFAULT 993,
     password_enc TEXT NOT NULL,
+    assigned_user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -483,6 +485,63 @@ function migrate(db) {
         SELECT id,name,email,phone,password_hash,role,agent_id,customer_id,salary,status,active,last_login_at,created_at FROM users;
       DROP TABLE users;
       ALTER TABLE users_new RENAME TO users;
+    `);
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+
+  // username-based staff logins: admin creates an employee account with a
+  // username instead of requiring a personal email, so email must become
+  // optional — SQLite can't drop NOT NULL in place, so rebuild once more.
+  const usersDef3 = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`).get();
+  if (usersDef3 && usersDef3.sql && !usersDef3.sql.includes('username')) {
+    db.exec('PRAGMA foreign_keys = OFF;');
+    db.exec(`
+      CREATE TABLE users_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        username TEXT UNIQUE,
+        email TEXT UNIQUE,
+        phone TEXT,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'customer' CHECK(role IN ('admin','manager','shop_manager','finance','delivery','employee','agent','customer','labour')),
+        agent_id INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        salary REAL,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('pending','active','disabled')),
+        active INTEGER NOT NULL DEFAULT 1,
+        last_login_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (username IS NOT NULL OR email IS NOT NULL)
+      );
+      INSERT INTO users_new (id,name,email,phone,password_hash,role,agent_id,customer_id,salary,status,active,last_login_at,created_at)
+        SELECT id,name,email,phone,password_hash,role,agent_id,customer_id,salary,status,active,last_login_at,created_at FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+    `);
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+
+  // company mailboxes move from "one per self-connecting user" to
+  // admin-managed entities assignable to any staff member — preserve each
+  // already-connected mailbox's user as its initial assignee.
+  const mcols = db.prepare(`PRAGMA table_info(mailboxes)`).all().map(c => c.name);
+  if (mcols.includes('user_id')) {
+    db.exec('PRAGMA foreign_keys = OFF;');
+    db.exec(`
+      CREATE TABLE mailboxes_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        imap_host TEXT NOT NULL DEFAULT 'mail.purepak.com.pk',
+        imap_port INTEGER NOT NULL DEFAULT 993,
+        password_enc TEXT NOT NULL,
+        assigned_user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO mailboxes_new (id,email,imap_host,imap_port,password_enc,assigned_user_id,created_at,updated_at)
+        SELECT id,email,imap_host,imap_port,password_enc,user_id,created_at,updated_at FROM mailboxes;
+      DROP TABLE mailboxes;
+      ALTER TABLE mailboxes_new RENAME TO mailboxes;
     `);
     db.exec('PRAGMA foreign_keys = ON;');
   }

@@ -2,9 +2,12 @@
   "name": "purepak-server",
   "private": true,
   "version": "1.0.0",
-  "engines": { "node": ">=22.6.0" },
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "dependencies": {
     "imapflow": "^1.0.167",
-    "mailparser": "^3.7.1"
+    "mailparser": "^3.7.1",
+    "nodemailer": "^10.6.1"
   }
 }

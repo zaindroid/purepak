@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { init, verifyPassword, hashPassword, DB_PATH, RESTORE_PENDING, TEST_ACCOUNTS } = require('./db');
 const mail = require('./mail');
+const cpanel = require('./cpanel');
 
 const PORT = Number(process.env.PORT || 4310);
 const { db } = init();
@@ -2619,6 +2620,56 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true });
   }
 
+  // ---- real mailboxes that exist on the mail server right now (cPanel, via
+  // SSH+uapi — the plain HTTPS API is firewalled off for this account) ----
+  if (method === 'GET' && parts[1] === 'cpanel' && parts[2] === 'emails' && parts.length === 3) {
+    if (!canManage) return err(res, 403, 'Forbidden');
+    try {
+      const registered = new Set(db.prepare('SELECT email FROM mailboxes').all().map(r => r.email.toLowerCase()));
+      const emails = await cpanel.listEmailAccounts();
+      return json(res, 200, emails.map(email => ({ email, registered: registered.has(email.toLowerCase()) })));
+    } catch (e) {
+      return err(res, 502, 'Could not reach the mail server — ' + e.message);
+    }
+  }
+  // creates a brand-new @purepak.com.pk mailbox on the real mail server,
+  // then registers it exactly like linking an existing one
+  if (method === 'POST' && parts[1] === 'mailboxes' && parts[2] === 'provision' && parts.length === 3) {
+    if (!canManage) return err(res, 403, 'Forbidden');
+    const b = await readBody(req);
+    const localPart = String(b.local_part || '').trim().toLowerCase();
+    const password = String(b.password || '');
+    if (!/^[a-z0-9._-]{1,64}$/.test(localPart)) return err(res, 400, 'Use only lowercase letters, numbers, dot, underscore or dash');
+    if (password.length < 8) return err(res, 400, 'Choose a password at least 8 characters long');
+    const email = localPart + '@purepak.com.pk';
+    if (db.prepare('SELECT id FROM mailboxes WHERE email=?').get(email)) return err(res, 400, 'That mailbox is already registered');
+    try {
+      await cpanel.createEmailAccount(localPart, password, 250);
+    } catch (e) {
+      return err(res, 400, 'Could not create the mailbox on the mail server — ' + e.message);
+    }
+    const row = { email, imap_host: 'mail.purepak.com.pk', imap_port: 993, password_enc: mail.encryptPassword(password) };
+    try {
+      await mail.verifyMailbox(row);
+    } catch (e) {
+      return err(res, 502, 'Mailbox was created on the server but isn’t answering IMAP yet — wait a minute, then link it from the list below');
+    }
+    let assignedUserId = null;
+    if (b.assigned_user_id) {
+      if (!db.prepare('SELECT id FROM users WHERE id=?').get(+b.assigned_user_id)) return err(res, 400, 'That employee was not found');
+      if (db.prepare('SELECT id FROM mailboxes WHERE assigned_user_id=?').get(+b.assigned_user_id))
+        return err(res, 400, 'That employee is already assigned another mailbox');
+      assignedUserId = +b.assigned_user_id;
+    }
+    const r = db.prepare(`INSERT INTO mailboxes(email,imap_host,imap_port,password_enc,assigned_user_id) VALUES (?,?,?,?,?)`)
+      .run(row.email, row.imap_host, row.imap_port, row.password_enc, assignedUserId);
+    const id = Number(r.lastInsertRowid);
+    audit(user, 'mailbox.provision', 'mailbox', id, `Created and registered new mailbox ${email} (by ${user.name})`, null, { email, assignedUserId });
+    if (assignedUserId) notify([assignedUserId], 'team', 'Mailbox assigned',
+      `${email} was created and assigned to you by ${user.name} — check My Email in your portal.`, 'mailbox#' + id);
+    return json(res, 201, { id, email, assigned_user_id: assignedUserId });
+  }
+
   // ---- company mailboxes: admin sets one up once and assigns it to a
   // staff member, who then reads it in-app under "My Email" ----
   if (method === 'GET' && parts[1] === 'mailboxes' && parts.length === 2) {
@@ -2714,8 +2765,9 @@ async function handleApi(req, res, url) {
     const mb = db.prepare('SELECT * FROM mailboxes WHERE assigned_user_id=?').get(user.id);
     if (!mb) return err(res, 404, 'No mailbox assigned');
     if (rateLimited('mailbox-list:' + user.id, 20, 60 * 1000)) return err(res, 429, 'Too many requests — wait a moment');
+    const folder = url.searchParams.get('folder') === 'sent' ? 'SENT' : 'INBOX';
     try {
-      const messages = await mail.listMessages(mb, 30);
+      const messages = await mail.listMessages(mb, 30, folder);
       return json(res, 200, messages);
     } catch (e) {
       return err(res, 502, 'Could not reach the mail server — try again shortly');
@@ -2726,12 +2778,32 @@ async function handleApi(req, res, url) {
     const mb = db.prepare('SELECT * FROM mailboxes WHERE assigned_user_id=?').get(user.id);
     if (!mb) return err(res, 404, 'No mailbox assigned');
     if (rateLimited('mailbox-read:' + user.id, 30, 60 * 1000)) return err(res, 429, 'Too many requests — wait a moment');
+    const folder = url.searchParams.get('folder') === 'sent' ? 'SENT' : 'INBOX';
     try {
-      const message = await mail.readMessage(mb, +parts[3]);
+      const message = await mail.readMessage(mb, +parts[3], folder);
       return json(res, 200, message);
     } catch (e) {
       return err(res, 502, 'Could not open that message — try again shortly');
     }
+  }
+  if (method === 'POST' && parts[1] === 'mailbox' && parts[2] === 'send' && parts.length === 3) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    const mb = db.prepare('SELECT * FROM mailboxes WHERE assigned_user_id=?').get(user.id);
+    if (!mb) return err(res, 404, 'No mailbox assigned');
+    if (rateLimited('mailbox-send:' + user.id, 10, 60 * 1000)) return err(res, 429, 'Too many requests — wait a moment');
+    const b = await readBody(req);
+    const to = String(b.to || '').trim();
+    const subject = String(b.subject || '').trim() || '(no subject)';
+    const text = String(b.text || '');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return err(res, 400, 'Enter a valid recipient address');
+    if (!text.trim()) return err(res, 400, 'Write a message before sending');
+    try {
+      await mail.sendMail(mb, { to, subject, text });
+    } catch (e) {
+      return err(res, 502, 'Could not send that email — try again shortly');
+    }
+    audit(user, 'mailbox.send', 'mailbox', mb.id, `${mb.email} sent mail to ${to} (by ${user.name})`, null, { to, subject });
+    return json(res, 200, { ok: true });
   }
   if (method === 'GET' && parts[1] === 'receipts' && parts.length === 2) {
     requireRole(user, ['admin', 'manager', 'finance', 'agent', 'delivery']);

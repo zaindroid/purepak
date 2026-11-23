@@ -14,3 +14,16 @@ env:
   # passwords at rest — generated once by the platform, never typed by hand.
   PUREPAK_MAILBOX_KEY:
     generate: hex
+  # cPanel mail-server access for company-mailbox provisioning (see
+  # server/cpanel.js) — real external credentials, set manually, never
+  # auto-generated.
+  PUREPAK_CPANEL_HOST:
+    required: true
+  PUREPAK_CPANEL_PORT:
+    required: true
+  PUREPAK_CPANEL_USER:
+    required: true
+  PUREPAK_CPANEL_DOMAIN:
+    required: true
+  PUREPAK_CPANEL_SSH_KEY:
+    required: true

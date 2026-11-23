@@ -937,6 +937,8 @@ async function viewProfile() {
 }
 
 // ================= EMAIL (read your @purepak.com.pk inbox in-app) =================
+let _mailFolder = 'inbox';
+function setMailFolder(f) { _mailFolder = f === 'sent' ? 'sent' : 'inbox'; }
 async function viewMyEmail() {
   const status = await API.mailboxStatus().catch(() => ({ connected: false }));
   if (!status.connected) {
@@ -947,35 +949,45 @@ async function viewMyEmail() {
       <p class="muted" style="font-size:13px;margin:0">Ask your admin to assign you a @purepak.com.pk mailbox from Team → Company mailboxes. Once assigned, it shows up here automatically.</p>
     </div>`;
   }
-  const messages = await API.mailboxMessages().catch(() => []);
-  const row = (m) => `<div class="team-row" data-act="read-mail" data-uid="${m.uid}" style="cursor:pointer">
+  const folder = _mailFolder;
+  const messages = await API.mailboxMessages(folder).catch(() => []);
+  const row = (m) => `<div class="team-row" data-act="read-mail" data-uid="${m.uid}" data-folder="${folder}" style="cursor:pointer">
     <div class="team-av">${IC.mail}</div>
     <div class="team-main">
       <div class="nm" style="${m.unread ? 'font-weight:800' : ''}">${API.esc(m.subject)}</div>
-      <div class="sub">${API.esc(m.from)} · ${m.date ? API.fmtDate(m.date) : ''}</div>
+      <div class="sub">${folder === 'sent' ? 'To ' + API.esc(m.to || '—') : API.esc(m.from)} · ${m.date ? API.fmtDate(m.date) : ''}</div>
     </div>
   </div>`;
   return `
   <div class="page-head"><h1>Email</h1>
-    <button class="btn sm ghost" data-act="refresh-mail">Refresh</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn sm primary" data-act="compose-mail">Compose</button>
+      <button class="btn sm ghost" data-act="refresh-mail">Refresh</button>
+    </div>
   </div>
-  <p class="muted" style="font-size:12.5px;margin:2px 0 14px">Assigned mailbox: ${API.esc(status.email)}</p>
-  ${messages.map(row).join('') || '<div class="card card-pad empty">Inbox is empty.</div>'}`;
+  <p class="muted" style="font-size:12.5px;margin:2px 0 10px">Assigned mailbox: ${API.esc(status.email)}</p>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn sm ${folder === 'inbox' ? 'primary' : 'ghost'}" data-act="mail-folder" data-mode="inbox">Inbox</button>
+    <button class="btn sm ${folder === 'sent' ? 'primary' : 'ghost'}" data-act="mail-folder" data-mode="sent">Sent</button>
+  </div>
+  ${messages.map(row).join('') || `<div class="card card-pad empty">${folder === 'sent' ? 'No sent mail yet.' : 'Inbox is empty.'}</div>`}`;
 }
 // Email content is from untrusted senders, never raw-injected: the subject
 // goes through API.esc(), and the HTML body renders inside a sandboxed
 // iframe (sandbox="" — no scripts, no forms, no same-origin) so nothing in
 // a received email can run script or reach the rest of the page.
-function modalReadMessage(uid) {
+function modalReadMessage(uid, folder) {
   openModal('Loading…', '<div class="modal-bd"><p class="muted">Fetching message…</p></div>');
-  API.mailboxMessage(uid).then(m => {
+  API.mailboxMessage(uid, folder).then(m => {
     openModal(API.esc(m.subject || '(no subject)'), `
       <div class="modal-bd">
         <p class="muted" style="font-size:12.5px;margin:0 0 4px">From: ${API.esc(m.from)}</p>
+        <p class="muted" style="font-size:12.5px;margin:0 0 4px">To: ${API.esc(m.to || '')}</p>
         <p class="muted" style="font-size:12.5px;margin:0 0 14px">${m.date ? API.fmtDate(m.date) : ''}</p>
         <div id="mailBodyHost" style="border-top:1px solid var(--line-2);padding-top:14px"></div>
       </div>`,
-      `<button class="btn ghost" data-close-modal>Close</button>`);
+      `<button class="btn ghost" data-close-modal>Close</button>
+       <button class="btn primary" data-act="compose-mail" data-to="${API.esc(m.from)}">Reply</button>`);
     const host = document.getElementById('mailBodyHost');
     if (m.html) {
       const frame = document.createElement('iframe');
@@ -992,6 +1004,36 @@ function modalReadMessage(uid) {
   }).catch(e => {
     openModal('Could not open message', `<div class="modal-bd"><p class="muted">${API.esc(e.message)}</p></div>`,
       `<button class="btn ghost" data-close-modal>Close</button>`);
+  });
+}
+function modalComposeMail(prefillTo) {
+  openModal('Compose email', `
+    <div class="modal-bd">
+      <label class="muted">To</label>
+      <input id="mcTo" class="input" style="width:100%;margin:4px 0 10px" type="email" placeholder="name@example.com" value="${API.esc(prefillTo || '')}">
+      <label class="muted">Subject</label>
+      <input id="mcSubject" class="input" style="width:100%;margin:4px 0 10px" placeholder="Subject">
+      <label class="muted">Message</label>
+      <textarea id="mcBody" class="input" style="width:100%;margin:4px 0;min-height:160px;resize:vertical"></textarea>
+    </div>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button>
+     <button class="btn primary" id="mcSend">Send</button>`);
+  document.getElementById('mcSend').addEventListener('click', async () => {
+    const to = document.getElementById('mcTo').value.trim();
+    const subject = document.getElementById('mcSubject').value.trim();
+    const text = document.getElementById('mcBody').value;
+    if (!to || !text.trim()) { toast('Enter a recipient and a message', 'warn'); return; }
+    const btn = document.getElementById('mcSend');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      await API.sendMail({ to, subject, text });
+      closeModal();
+      toast('Email sent', 'ok');
+      App.refresh();
+    } catch (e) {
+      toast(e.message, 'err');
+      btn.disabled = false; btn.textContent = 'Send';
+    }
   });
 }
 
@@ -2359,7 +2401,7 @@ function modalConfirmScan(rec, kind) {
 async function viewTeam() {
   const u = API.user;
   const isRoot = u.role === 'admin';
-  const [all, mailboxes] = await Promise.all([API.users(), API.mailboxes().catch(() => [])]);
+  const [all, mailboxes, cpanelEmails] = await Promise.all([API.users(), API.mailboxes().catch(() => []), API.cpanelEmails().catch(() => null)]);
   const agents = all.filter(r => r.role === 'agent');
   // Team = employees only. Customers have their own page; agents are shown as a
   // summary chip strip below (managed in Agents & commissions).
@@ -2414,21 +2456,40 @@ async function viewTeam() {
         </div>
       </div>
     </div>`;
+    const registeredEmails = new Set(mailboxes.map(m => m.email.toLowerCase()));
+    const unlinked = (cpanelEmails || []).filter(e => !registeredEmails.has(e.email.toLowerCase()));
+    const assignOptionsHtml = (selectId) => `
+        <option value="">Leave unassigned for now</option>
+        ${staff.filter(s => !assignedIds.has(s.id)).map(s => `<option value="${s.id}">${API.esc(s.name)}</option>`).join('')}`;
     return `
     <div class="sec-t">Company mailboxes — ${mailboxes.length}</div>
     <p class="muted" style="font-size:12.5px;margin:-4px 0 10px">Set up a @purepak.com.pk mailbox once, then assign it to whoever should see it under their own "Email" tab — their password is never shared with them.</p>
     ${mailboxes.map(mbRow).join('') || '<div class="empty" style="margin-bottom:10px">No company mailboxes added yet.</div>'}
-    <div class="card" style="padding:14px 16px;max-width:520px">
+    <div class="card" style="padding:14px 16px;max-width:560px">
       <div class="card-head"><h2 style="font-size:14px;margin:0">Add a company mailbox</h2></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 10px">
-        <input id="cmbEmail" class="input" placeholder="hello@purepak.com.pk" autocomplete="off">
-        <input id="cmbPassword" class="input" type="password" placeholder="Mailbox password" autocomplete="new-password">
+      <div style="display:flex;gap:8px;margin:8px 0 12px">
+        <button type="button" id="cmbModeLink" class="btn sm primary" data-act="cmb-mode" data-mode="link">Link existing</button>
+        <button type="button" id="cmbModeNew" class="btn sm ghost" data-act="cmb-mode" data-mode="new">Create new</button>
       </div>
-      <select id="cmbAssign" class="input" style="width:100%;margin-bottom:10px">
-        <option value="">Leave unassigned for now</option>
-        ${staff.filter(s => !assignedIds.has(s.id)).map(s => `<option value="${s.id}">${API.esc(s.name)}</option>`).join('')}
-      </select>
-      <button class="btn primary sm" data-act="add-mailbox">Add mailbox</button>
+      ${cpanelEmails === null ? `<p class="muted" style="font-size:12px;margin:0 0 10px;color:var(--amber, #b45309)">Couldn’t reach the mail server to list real mailboxes right now — you can still try again shortly.</p>` : ''}
+      <div id="cmbLinkPanel">
+        <select id="cmbExisting" class="input" style="width:100%;margin-bottom:8px">
+          <option value="">${unlinked.length ? 'Choose a mailbox…' : (cpanelEmails === null ? 'Unavailable right now' : 'No unlinked mailboxes found')}</option>
+          ${unlinked.map(e => `<option value="${API.esc(e.email)}">${API.esc(e.email)}</option>`).join('')}
+        </select>
+        <input id="cmbPassword" class="input" style="width:100%;margin-bottom:8px" type="password" placeholder="Mailbox password" autocomplete="new-password">
+        <select id="cmbAssign" class="input" style="width:100%;margin-bottom:10px">${assignOptionsHtml()}</select>
+        <button class="btn primary sm" data-act="add-mailbox">Link mailbox</button>
+      </div>
+      <div id="cmbNewPanel" class="hidden">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+          <input id="cmbLocalPart" class="input" style="flex:1" placeholder="e.g. sales" autocomplete="off">
+          <span class="muted" style="font-size:13px;white-space:nowrap">@purepak.com.pk</span>
+        </div>
+        <input id="cmbNewPassword" class="input" style="width:100%;margin-bottom:8px" type="password" placeholder="Set a password (min 8 characters)" autocomplete="new-password">
+        <select id="cmbNewAssign" class="input" style="width:100%;margin-bottom:10px">${assignOptionsHtml()}</select>
+        <button class="btn primary sm" data-act="create-mailbox">Create mailbox</button>
+      </div>
     </div>`;
   }
 

@@ -679,7 +679,7 @@ const App = {
   },
 
   async act(ds, ev) {
-    const { act, id, status, to, product, name, due, method, active, uid } = ds;
+    const { act, id, status, to, product, name, due, method, active, uid, mode, folder } = ds;
     const role = API.user.role;
     const stop = () => ev && ev.stopPropagation();
     switch (act) {
@@ -796,21 +796,51 @@ const App = {
         } catch (e) { this.toast(e.message, 'err'); }
         break;
       }
+      case 'cmb-mode': stop(); {
+        const isNew = mode === 'new';
+        document.getElementById('cmbLinkPanel').classList.toggle('hidden', isNew);
+        document.getElementById('cmbNewPanel').classList.toggle('hidden', !isNew);
+        document.getElementById('cmbModeLink').classList.toggle('primary', !isNew);
+        document.getElementById('cmbModeLink').classList.toggle('ghost', isNew);
+        document.getElementById('cmbModeNew').classList.toggle('primary', isNew);
+        document.getElementById('cmbModeNew').classList.toggle('ghost', !isNew);
+        break;
+      }
       case 'add-mailbox': stop(); {
-        const email = document.getElementById('cmbEmail').value.trim();
+        const email = document.getElementById('cmbExisting').value;
         const password = document.getElementById('cmbPassword').value;
         const assignSel = document.getElementById('cmbAssign');
         const assigned_user_id = assignSel && assignSel.value ? +assignSel.value : null;
-        if (!email || !password) { this.toast('Enter the mailbox address and password', 'warn'); return; }
+        if (!email) { this.toast('Choose a mailbox to link', 'warn'); return; }
+        if (!password) { this.toast('Enter the mailbox password', 'warn'); return; }
         const btn = ev.target.closest('[data-act]');
-        btn.disabled = true; btn.textContent = 'Adding…';
+        btn.disabled = true; btn.textContent = 'Linking…';
         try {
           await API.createMailbox({ email, password, assigned_user_id });
-          this.toast('Mailbox added');
+          this.toast('Mailbox linked');
           this.refresh();
         } catch (e) {
           this.toast(e.message, 'err');
-          btn.disabled = false; btn.textContent = 'Add mailbox';
+          btn.disabled = false; btn.textContent = 'Link mailbox';
+        }
+        break;
+      }
+      case 'create-mailbox': stop(); {
+        const localPart = document.getElementById('cmbLocalPart').value.trim();
+        const password = document.getElementById('cmbNewPassword').value;
+        const assignSel = document.getElementById('cmbNewAssign');
+        const assigned_user_id = assignSel && assignSel.value ? +assignSel.value : null;
+        if (!localPart) { this.toast('Enter a name for the new mailbox', 'warn'); return; }
+        if (password.length < 8) { this.toast('Password must be at least 8 characters', 'warn'); return; }
+        const btn = ev.target.closest('[data-act]');
+        btn.disabled = true; btn.textContent = 'Creating…';
+        try {
+          await API.provisionMailbox({ local_part: localPart, password, assigned_user_id });
+          this.toast('Mailbox created and linked');
+          this.refresh();
+        } catch (e) {
+          this.toast(e.message, 'err');
+          btn.disabled = false; btn.textContent = 'Create mailbox';
         }
         break;
       }
@@ -834,7 +864,9 @@ const App = {
         break;
       }
       case 'refresh-mail': stop(); this.refresh(); break;
-      case 'read-mail': stop(); modalReadMessage(+uid); break;
+      case 'mail-folder': stop(); setMailFolder(mode); this.refresh(); break;
+      case 'read-mail': stop(); modalReadMessage(+uid, folder); break;
+      case 'compose-mail': stop(); modalComposeMail(to); break;
       case 'review-production': stop(); {
         try {
           await API.reviewProduction(+id, { status });

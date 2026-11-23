@@ -19,8 +19,11 @@ ENV NODE_ENV=production \
 # shells into the container and curls /health there. node:22-slim ships
 # neither curl nor wget, so the check fails with "command not found" and the
 # (perfectly healthy) container gets rolled back.
+# openssh-client: company-mailbox provisioning runs `uapi` on the mail
+# host's cPanel over SSH (its own HTTPS API is firewalled off for that
+# hosting account) — see server/cpanel.js.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Pre-create the data dir owned by the runtime user. When the platform mounts

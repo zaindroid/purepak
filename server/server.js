@@ -1695,6 +1695,7 @@ async function handleApi(req, res, url) {
 
   // ---- customers ----
   if (method === 'GET' && parts[1] === 'customers') {
+    if (!user) throw httpError(401, 'Not authenticated');
     const canOrderCreatorPick = ['admin', 'manager', 'shop_manager', 'agent'].includes(user.role) && permissions.canAccessPage(user.role, 'orders');
     if (!permissions.canAccessPage(user.role, 'customers') && !canOrderCreatorPick) {
       throw httpError(403, 'Forbidden: no access to customers');

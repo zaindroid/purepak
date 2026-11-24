@@ -569,6 +569,33 @@ function migrate(db) {
     for (const t of ['retail', 'wholesale', 'hotel', 'restaurant', 'institutional']) insCt.run(t);
   }
 
+  // role_permissions: which portal pages each role can see — admin-editable
+  // at runtime (see server/permissions.js), not touched again by this
+  // migration once a row exists for it.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      role TEXT NOT NULL,
+      page TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (role, page)
+    );
+  `);
+  const rp = db.prepare('SELECT COUNT(*) AS c FROM role_permissions').get().c;
+  if (rp === 0) {
+    const insRp = db.prepare('INSERT INTO role_permissions(role,page,enabled) VALUES (?,?,1)');
+    const SEED = {
+      manager: ['dashboard','orders','deliveries','route','vehicle-logs','production','offers','bookkeeping','receipts','payments','payroll','audit','products','team','email','backups'],
+      shop_manager: ['orders','deliveries','email'],
+      finance: ['dashboard','bookkeeping','orders','receipts','payroll','agents','email'],
+      agent: ['dashboard','orders','customers','commissions','receipts','email'],
+      delivery: ['route','deliveries','vehicle-logs','receipts','email'],
+      employee: ['profile','email'],
+      labour: ['production','email'],
+      customer: ['home','orders','profile'],
+    };
+    for (const [role, pages] of Object.entries(SEED)) for (const page of pages) insRp.run(role, page);
+  }
+
   // brand name is one word, "PurePak" — early product rows were seeded as
   // "Pure Pak ..." with a space; fix any that are still stuck with the old
   // name (harmless to re-run: no row matches once fixed)

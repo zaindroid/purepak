@@ -1352,7 +1352,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, { count: offerAudienceUserIds(filters).length });
   }
   if (method === 'GET' && parts[1] === 'offers' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager']);
+    permissions.requirePage(user, 'offers');
     return json(res, 200, db.prepare('SELECT * FROM offers ORDER BY id DESC').all());
   }
   if (method === 'POST' && parts[1] === 'offers') {
@@ -1410,7 +1410,7 @@ async function handleApi(req, res, url) {
   // ---- team / user management (admin + manager) ----
   const canManage = ['admin', 'manager'].includes(user?.role || '');
   if (method === 'GET' && parts[1] === 'users' && parts.length === 2) {
-    if (!canManage) return err(res, 403, 'Forbidden');
+    if (!permissions.canAccessPage(user?.role, 'team')) return err(res, 403, 'Forbidden');
     const rows = db.prepare(`
       SELECT u.*, a.name AS agent_name, c.name AS customer_name, c.type AS customer_type
       FROM users u
@@ -2337,7 +2337,7 @@ async function handleApi(req, res, url) {
 
   // ---- payroll ----
   if (method === 'GET' && parts[1] === 'payroll' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'finance']);
+    permissions.requirePage(user, 'payroll');
     const period = url.searchParams.get('period') || new Date().toISOString().slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(period)) return err(res, 400, 'period must be YYYY-MM');
     const staff = db.prepare(`SELECT id, name, role, salary, status FROM users
@@ -2424,13 +2424,13 @@ async function handleApi(req, res, url) {
 
   // ---- bookkeeping ----
   if (method === 'GET' && parts[1] === 'ledger' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'finance']);
+    permissions.requirePage(user, 'bookkeeping');
     const since = url.searchParams.get('since');
     const sql = since ? `SELECT * FROM ledger WHERE at>=? ORDER BY at DESC, id DESC` : `SELECT * FROM ledger ORDER BY at DESC, id DESC`;
     return json(res, 200, db.prepare(sql).all(...(since ? [since] : [])));
   }
   if (method === 'GET' && parts[1] === 'ledger' && parts[2] === 'summary') {
-    requireRole(user, ['admin', 'manager', 'finance']);
+    permissions.requirePage(user, 'bookkeeping');
     const month = url.searchParams.get('month') || new Date().toISOString().slice(0, 7);
     const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND strftime('%Y-%m',at)=?`).get(month).v;
     const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND strftime('%Y-%m',at)=?`).get(month).v;
@@ -2500,11 +2500,11 @@ async function handleApi(req, res, url) {
   }
   // --- audit trail (hash-chained) ---
   if (method === 'GET' && parts[1] === 'audit' && parts[2] === 'verify') {
-    requireRole(user, ['admin', 'manager']);
+    permissions.requirePage(user, 'audit');
     return json(res, 200, auditVerify());
   }
   if (method === 'GET' && parts[1] === 'audit' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager']);
+    permissions.requirePage(user, 'audit');
     const rows = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 400').all();
     for (const r of rows) {
       try { r.before = r.before_json ? JSON.parse(r.before_json) : null; } catch { r.before = r.before_json; }
@@ -2636,7 +2636,7 @@ async function handleApi(req, res, url) {
   // ---- real mailboxes that exist on the mail server right now (cPanel, via
   // SSH+uapi — the plain HTTPS API is firewalled off for this account) ----
   if (method === 'GET' && parts[1] === 'cpanel' && parts[2] === 'emails' && parts.length === 3) {
-    if (!canManage) return err(res, 403, 'Forbidden');
+    if (!permissions.canAccessPage(user?.role, 'team')) return err(res, 403, 'Forbidden');
     try {
       const registered = new Set(db.prepare('SELECT email FROM mailboxes').all().map(r => r.email.toLowerCase()));
       const emails = await cpanel.listEmailAccounts();
@@ -2686,7 +2686,7 @@ async function handleApi(req, res, url) {
   // ---- company mailboxes: admin sets one up once and assigns it to a
   // staff member, who then reads it in-app under "My Email" ----
   if (method === 'GET' && parts[1] === 'mailboxes' && parts.length === 2) {
-    if (!canManage) return err(res, 403, 'Forbidden');
+    if (!permissions.canAccessPage(user?.role, 'team')) return err(res, 403, 'Forbidden');
     const rows = db.prepare(`
       SELECT m.id, m.email, m.assigned_user_id, u.name AS assigned_name
       FROM mailboxes m LEFT JOIN users u ON u.id = m.assigned_user_id
@@ -2769,11 +2769,13 @@ async function handleApi(req, res, url) {
   // ---- "My Email" — a staff member's own read-only view of whichever
   // mailbox (if any) an admin has assigned to them ----
   if (method === 'GET' && parts[1] === 'mailbox' && parts.length === 2) {
+    permissions.requirePage(user, 'email');
     if (!user) return err(res, 401, 'Not authenticated');
     const mb = db.prepare('SELECT email FROM mailboxes WHERE assigned_user_id=?').get(user.id);
     return json(res, 200, { connected: !!mb, email: mb ? mb.email : null });
   }
   if (method === 'GET' && parts[1] === 'mailbox' && parts[2] === 'messages' && parts.length === 3) {
+    permissions.requirePage(user, 'email');
     if (!user) return err(res, 401, 'Not authenticated');
     const mb = db.prepare('SELECT * FROM mailboxes WHERE assigned_user_id=?').get(user.id);
     if (!mb) return err(res, 404, 'No mailbox assigned');
@@ -2787,6 +2789,7 @@ async function handleApi(req, res, url) {
     }
   }
   if (method === 'GET' && parts[1] === 'mailbox' && parts[2] === 'messages' && parts.length === 4 && !isNaN(+parts[3])) {
+    permissions.requirePage(user, 'email');
     if (!user) return err(res, 401, 'Not authenticated');
     const mb = db.prepare('SELECT * FROM mailboxes WHERE assigned_user_id=?').get(user.id);
     if (!mb) return err(res, 404, 'No mailbox assigned');
@@ -2819,7 +2822,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true });
   }
   if (method === 'GET' && parts[1] === 'receipts' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'finance', 'agent', 'delivery']);
+    permissions.requirePage(user, 'receipts');
     const q = (url.searchParams.get('q') || '').toLowerCase();
     const st = url.searchParams.get('status'); // pending | approved
     let sql = 'SELECT * FROM receipts';
@@ -2839,7 +2842,7 @@ async function handleApi(req, res, url) {
     const imgToken = url.searchParams.get('token');
     if (imgToken && !SESSIONS.has(imgToken)) return err(res, 401, 'Bad token');
     if (!user && !imgToken) return err(res, 401, 'Not authenticated');
-    requireRole(user || (SESSIONS.get(imgToken) && SESSIONS.get(imgToken).user), ['admin', 'manager', 'finance', 'agent', 'delivery']);
+    permissions.requirePage(user || (SESSIONS.get(imgToken) && SESSIONS.get(imgToken).user), 'receipts');
     const rc = db.prepare('SELECT * FROM receipts WHERE id=?').get(+parts[2]);
     if (!rc) return err(res, 404, 'Receipt not found');
     const dir = RECEIPTS_DIR;
@@ -2920,7 +2923,7 @@ async function handleApi(req, res, url) {
 
   // ---- database backups (admin only) ----
   if (method === 'GET' && parts[1] === 'backup' && parts[2] === 'list') {
-    requireRole(user, ['admin', 'manager']);
+    permissions.requirePage(user, 'backups');
     return json(res, 200, { backups: listBackups(), last_backup_at: setting('last_backup_at') });
   }
   if (method === 'POST' && parts[1] === 'backup' && parts[2] === 'run') {
@@ -3025,7 +3028,7 @@ async function handleApi(req, res, url) {
 
   // ---- kpis / analytics ----
   if (method === 'GET' && parts[1] === 'kpis') {
-    requireRole(user, ['admin', 'manager', 'finance', 'agent', 'delivery', 'customer']);
+    permissions.requirePage(user, 'dashboard');
     if (user.role === 'customer') {
       const mine = db.prepare('SELECT COUNT(*) c, COALESCE(SUM(total),0) t, COALESCE(SUM(total-paid),0) due FROM orders WHERE customer_id=? AND status<>\'cancelled\'').get(user.customer_id);
       return json(res, 200, { my_orders: mine.c, lifetime_spend: Math.round(mine.t), due: Math.round(mine.due) });
@@ -3039,11 +3042,11 @@ async function handleApi(req, res, url) {
     return json(res, 200, kpis());
   }
   if (method === 'GET' && parts[1] === 'analytics' && parts[2] === 'monthly') {
-    requireRole(user, ['admin', 'manager', 'finance']);
+    permissions.requirePage(user, 'bookkeeping');
     return json(res, 200, monthlySeries());
   }
   if (method === 'GET' && parts[1] === 'analytics' && parts[2] === 'top-customers') {
-    requireRole(user, ['admin', 'manager', 'finance']);
+    permissions.requirePage(user, 'bookkeeping');
     const rows = db.prepare(`SELECT c.name, c.area, SUM(o.total) sales, COUNT(*) orders
                              FROM orders o JOIN customers c ON c.id=o.customer_id
                              WHERE o.status<>'cancelled' GROUP BY o.customer_id ORDER BY sales DESC LIMIT 5`).all();

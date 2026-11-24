@@ -1434,6 +1434,38 @@ function initBackupsView() {
   });
 }
 
+// ---------- permissions: admin-only grid of which role sees which page ----------
+// Canonical display label per page key — independent of any role's own nav
+// label for the same page (e.g. 'agents' is "Agents & commissions" to admin
+// but "My customers"-adjacent framing elsewhere); this is just for the
+// settings-grid row, not real nav.
+const PERM_PAGE_LABELS = {
+  dashboard: 'Dashboard', orders: 'Orders', deliveries: 'Deliveries', route: 'Route map',
+  'vehicle-logs': 'Vehicle travel log', production: 'Production & stock', customers: 'Customers',
+  agents: 'Agents & commissions', commissions: 'Commissions', offers: 'Offers', bookkeeping: 'Bookkeeping',
+  receipts: 'Receipts', payments: 'Payment methods', payroll: 'Payroll', audit: 'Audit trail',
+  products: 'Products', team: 'Team', email: 'Email', backups: 'Backups',
+  profile: 'Profile', home: 'Shop (home)',
+};
+async function viewPermissions() {
+  const { grid, pages } = await API.getPermissions();
+  const roles = Object.keys(grid); // the 8 non-admin roles, as returned by the API
+  return `<div class="page-head"><h1>Permissions</h1></div>
+  <p class="muted" style="margin:-6px 0 14px;font-size:12.5px">Controls which portal sections each role can see. Changes take effect for everyone immediately — no logout needed.</p>
+  <div class="matrix-wrap"><table class="matrix">
+    <thead><tr><th>Page</th>${roles.map(r => `<th>${API.esc(API.roleLabel(r))}</th>`).join('')}<th>Admin</th></tr></thead>
+    <tbody>${pages.map(p => `<tr>
+      <td><b>${API.esc(PERM_PAGE_LABELS[p] || p)}</b></td>
+      ${roles.map(r => `<td class="inp"><input type="checkbox" style="width:auto" data-perm-role="${r}" data-perm-page="${p}" ${grid[r] && grid[r][p] ? 'checked' : ''}></td>`).join('')}
+      <td class="inp"><input type="checkbox" style="width:auto" checked disabled title="Admin always has full access and can't be edited here"></td>
+    </tr>`).join('')}</tbody>
+  </table></div>
+  <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
+    <button class="btn primary" data-act="save-permissions">Save</button>
+    <span class="muted" style="font-size:12px">Each role must keep at least one page enabled.</span>
+  </div>`;
+}
+
 // ---------- payment methods: the business's receiving accounts (admin/manager) ----------
 async function viewPayments() {
   const canEdit = ['admin', 'manager'].includes(API.user.role);
@@ -3292,6 +3324,7 @@ const ADMIN_NAV = [
   { to: 'team', icon: IC.shield, label: 'Team' },
   { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
+  { to: 'permissions', icon: IC.shield, label: 'Permissions' },
 ];
 // Shop manager: a single-purpose profile that only runs the order pipeline —
 // order received -> confirmed -> dispatched -> delivered. No money, catalog,
@@ -3321,7 +3354,17 @@ const MANAGER_NAV = [
   { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
 ];
-function navFor(role) {
+// `grid` is the { role: { page: boolean } } fetched from GET /api/permissions
+// (see web/app.js's App.permissions) -- each role's hardcoded array below is
+// still "the full catalog of what this role's nav could contain"; this
+// filters it down to what's actually enabled right now. admin always gets
+// its full catalog regardless of grid content (admin is never a row in the
+// table -- see server/permissions.js's canAccessPage). When no grid is
+// available yet (first paint before the initial fetch resolves, or any
+// fetch failure -- e.g. GET /api/permissions is admin-only today, so this
+// is the normal case for every non-admin role) the full hardcoded catalog is
+// also used, matching this app's behavior before this feature existed.
+function navFor(role, grid) {
   const N = {
     admin: ADMIN_NAV,
     manager: MANAGER_NAV,
@@ -3364,7 +3407,9 @@ function navFor(role) {
       { to: 'profile', icon: IC.users, label: 'My profile' },
     ],
   };
-  return N[role] || [];
+  const list = N[role] || [];
+  if (role === 'admin' || !grid || !grid[role]) return list;
+  return list.filter(item => grid[role][item.to]);
 }
 
 // view router: route key -> renderer (ctx = {params})
@@ -3376,6 +3421,7 @@ const VIEW = {
     agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts, backups: viewBackups, email: viewMyEmail,
+    permissions: viewPermissions,
   },
   manager: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,

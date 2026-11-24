@@ -90,6 +90,12 @@ function animateKPIs(root) {
 const App = {
   route: 'dashboard',
   ctx: {},
+  // live role->page grid from GET /api/permissions, used by navFor()/the VIEW
+  // router (see views.js) to filter nav + block stale deep links. null means
+  // "no grid available" -- navFor() then falls back to each role's full
+  // hardcoded nav catalog (today's pre-this-feature behavior), so a failed
+  // fetch is never worse than before this feature existed.
+  permissions: null,
 
   init() {
     document.getElementById('loginForm').addEventListener('submit', (e) => this.doLogin(e));
@@ -433,24 +439,55 @@ const App = {
     }
   },
 
-  enter(user) {
+  // Fetches the live role->page grid (see views.js's navFor/VIEW) so nav and
+  // routing reflect admin's current settings. GET /api/permissions is
+  // admin-only (server/server.js), so this 403s for every non-admin role —
+  // that failure is caught and treated the same as "no grid yet": navFor()
+  // falls back to the role's full hardcoded nav catalog, matching this
+  // feature's pre-existing behavior exactly, so a non-admin role is never
+  // worse off than before this feature shipped.
+  async refreshPermissions() {
+    try {
+      const r = await API.getPermissions();
+      this.permissions = r.grid;
+    } catch {
+      this.permissions = null;
+    }
+  },
+
+  // (re)builds the sidebar nav list for `user` from navFor(), using whatever
+  // grid is currently cached in this.permissions. Called once on login/
+  // restore, and again every time refreshPermissions() resolves from
+  // render()'s background refetch, so an admin's edit reaches an
+  // already-open session's nav without needing a logout.
+  renderNav(user) {
+    const nav = navFor(user.role, this.permissions);
+    document.getElementById('nav').innerHTML = nav.map((n, i) => {
+      const divider = n.section && n.section !== (nav[i - 1] && nav[i - 1].section)
+        ? `<div class="nav-section">${n.section}</div>` : '';
+      return `${divider}<a href="#/${n.to}" data-nav="${n.to}"><span class="ni">${n.icon}</span>${n.label}</a>`;
+    }).join('');
+    document.querySelectorAll('#nav a').forEach(a => {
+      a.classList.toggle('active', a.dataset.nav === this.route);
+      a.addEventListener('click', () => {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('scrim').classList.add('hidden');
+      });
+    });
+    return nav;
+  },
+
+  async enter(user) {
     this.hideSplash();
     document.getElementById('login').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     document.getElementById('sideName').textContent = user.name;
     document.getElementById('sideRole').textContent = API.roleLabel(user.role);
     document.getElementById('sideAvatar').textContent = (user.name[0] || '?').toUpperCase();
-    // build nav
-    const nav = navFor(user.role);
-    document.getElementById('nav').innerHTML = nav.map((n, i) => {
-      const divider = n.section && n.section !== (nav[i - 1] && nav[i - 1].section)
-        ? `<div class="nav-section">${n.section}</div>` : '';
-      return `${divider}<a href="#/${n.to}" data-nav="${n.to}"><span class="ni">${n.icon}</span>${n.label}</a>`;
-    }).join('');
-    document.querySelectorAll('#nav a').forEach(a => a.addEventListener('click', () => {
-      document.getElementById('sidebar').classList.remove('open');
-      document.getElementById('scrim').classList.add('hidden');
-    }));
+    // fetch the grid before the first nav build so it isn't drawn once
+    // unfiltered and then immediately rebuilt
+    await this.refreshPermissions();
+    const nav = this.renderNav(user);
     const def = nav[0].to;
     this.route = def;
     if (!location.hash || location.hash === '#/') location.hash = '#/' + def;
@@ -580,7 +617,7 @@ const App = {
   // shared by the in-app bell (bellOpen) and a tapped push notification
   // (onPushOpen, below) — same "ref" format either way (e.g. "order#123")
   routeByRef(ref) {
-    const valid = navFor(API.user.role).map(n => n.to);
+    const valid = navFor(API.user.role, this.permissions).map(n => n.to);
     const goto = (...prefs) => { location.hash = '#/' + (prefs.find(p => valid.includes(p)) || valid[0] || 'dashboard'); };
     let m;
     if ((m = /^receipt#(\d+)$/.exec(ref))) {
@@ -624,9 +661,14 @@ const App = {
     if (this.checkResetPasswordRoute()) return;
     const u = API.user;
     if (!u) return this.showLogin();
+    // Refetch the grid in the background on every navigation (fire-and-
+    // forget — must not block this route's render) so an admin's edit
+    // reaches this role's nav on its very next click, without logout. Once
+    // it resolves, rebuild the sidebar from the fresh grid.
+    this.refreshPermissions().then(() => this.renderNav(u));
     const parts = this.hashRoute().split('/');
     let route = parts[0] || 'dashboard';
-    const valid = navFor(u.role).map(n => n.to);
+    const valid = navFor(u.role, this.permissions).map(n => n.to);
     if (!valid.includes(route)) route = valid[0];
     this.route = route;
     this.ctx = { status: parts[1] || '' };
@@ -968,6 +1010,19 @@ const App = {
         } catch (e) { this.toast(e.message, 'err'); }
       }
         break;
+      case 'save-permissions': stop(); {
+        const grid = {};
+        document.querySelectorAll('[data-perm-role]').forEach(inp => {
+          const r = inp.dataset.permRole, p = inp.dataset.permPage;
+          (grid[r] = grid[r] || {})[p] = inp.checked;
+        });
+        try {
+          await API.savePermissions(grid);
+          this.toast('Permissions saved', 'ok');
+          this.refresh(); // re-renders this view AND (via render()'s background
+                           // refreshPermissions) updates this session's own nav
+        } catch (e) { this.toast(e.message, 'err'); } // e.message is the server's own 400 text on a zero-pages rejection
+      } break;
       case 'add-expense': stop(); modalAddLedger('expense'); break;
       case 'add-income': stop(); modalAddLedger('income'); break;
       case 'ledger-void': stop(); modalVoidLedger(+id); break;

@@ -3354,17 +3354,17 @@ const MANAGER_NAV = [
   { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
 ];
-// `grid` is the { role: { page: boolean } } fetched from GET /api/permissions
-// (see web/app.js's App.permissions) -- each role's hardcoded array below is
-// still "the full catalog of what this role's nav could contain"; this
-// filters it down to what's actually enabled right now. admin always gets
-// its full catalog regardless of grid content (admin is never a row in the
-// table -- see server/permissions.js's canAccessPage). When no grid is
-// available yet (first paint before the initial fetch resolves, or any
-// fetch failure -- e.g. GET /api/permissions is admin-only today, so this
-// is the normal case for every non-admin role) the full hardcoded catalog is
-// also used, matching this app's behavior before this feature existed.
-function navFor(role, grid) {
+// `pages` is the flat array of this role's own enabled page keys, fetched
+// from GET /api/my-pages (see web/app.js's App.permissions) -- each role's
+// hardcoded array below is still "the full catalog of what this role's nav
+// could contain"; this filters it down to what's actually enabled right
+// now. admin always gets its full catalog regardless of `pages` (admin is
+// never a row in the role_permissions table -- see server/permissions.js's
+// canAccessPage). When `pages` isn't available yet (first paint before the
+// initial fetch resolves, or a genuine network failure) the full hardcoded
+// catalog is also used, matching this app's behavior before this feature
+// existed.
+function navFor(role, pages) {
   const N = {
     admin: ADMIN_NAV,
     manager: MANAGER_NAV,
@@ -3408,8 +3408,8 @@ function navFor(role, grid) {
     ],
   };
   const list = N[role] || [];
-  if (role === 'admin' || !grid || !grid[role]) return list;
-  return list.filter(item => grid[role][item.to]);
+  if (role === 'admin' || !pages) return list;
+  return list.filter(item => pages.includes(item.to));
 }
 
 // view router: route key -> renderer (ctx = {params})

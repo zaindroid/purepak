@@ -104,9 +104,13 @@ const API = (() => {
     deleteMailbox: (id) => del('/mailboxes/' + id),
     cpanelEmails: () => g('/cpanel/emails'),
     provisionMailbox: (b) => post('/mailboxes/provision', b),
-    // admin-only role->page grid (see web/views.js's navFor/viewPermissions)
+    // admin-only role->page grid (see web/views.js's viewPermissions) — used
+    // ONLY by the admin Permissions screen, never for nav/routing
     getPermissions: () => g('/permissions'),
     savePermissions: (grid) => put('/permissions', { grid }),
+    // the caller's own enabled pages — any authenticated role may call this;
+    // used by App.refreshPermissions (web/app.js) to drive nav/routing
+    getMyPages: () => g('/my-pages'),
     uploadAndroidApk: (b) => post('/admin/app/android', b),
     createOffer: (b) => post('/offers', b),
     offerAudienceCount: (filters) => post('/offers/audience-count', filters),

@@ -90,11 +90,12 @@ function animateKPIs(root) {
 const App = {
   route: 'dashboard',
   ctx: {},
-  // live role->page grid from GET /api/permissions, used by navFor()/the VIEW
-  // router (see views.js) to filter nav + block stale deep links. null means
-  // "no grid available" -- navFor() then falls back to each role's full
-  // hardcoded nav catalog (today's pre-this-feature behavior), so a failed
-  // fetch is never worse than before this feature existed.
+  // this user's own enabled pages (a flat array of page keys, from GET
+  // /api/my-pages), used by navFor()/the VIEW router (see views.js) to
+  // filter nav + block stale deep links. null means "not fetched yet" --
+  // navFor() then falls back to the role's full hardcoded nav catalog
+  // (today's pre-this-feature behavior), so a failed fetch is never worse
+  // than before this feature existed.
   permissions: null,
 
   init() {
@@ -439,24 +440,25 @@ const App = {
     }
   },
 
-  // Fetches the live role->page grid (see views.js's navFor/VIEW) so nav and
-  // routing reflect admin's current settings. GET /api/permissions is
-  // admin-only (server/server.js), so this 403s for every non-admin role —
-  // that failure is caught and treated the same as "no grid yet": navFor()
-  // falls back to the role's full hardcoded nav catalog, matching this
-  // feature's pre-existing behavior exactly, so a non-admin role is never
-  // worse off than before this feature shipped.
+  // Fetches this user's own enabled pages (see views.js's navFor/VIEW) so
+  // nav and routing reflect admin's current settings. GET /api/my-pages is
+  // open to any authenticated user (server/server.js) and can only ever
+  // return the caller's own role's data, so this should succeed for every
+  // role; the try/catch is just for a genuine network failure, in which
+  // case navFor() falls back to the role's full hardcoded nav catalog,
+  // matching this feature's pre-existing behavior exactly, so a failed
+  // fetch is never worse than before this feature shipped.
   async refreshPermissions() {
     try {
-      const r = await API.getPermissions();
-      this.permissions = r.grid;
+      const r = await API.getMyPages();
+      this.permissions = r.pages;
     } catch {
       this.permissions = null;
     }
   },
 
   // (re)builds the sidebar nav list for `user` from navFor(), using whatever
-  // grid is currently cached in this.permissions. Called once on login/
+  // pages array is currently cached in this.permissions. Called once on login/
   // restore, and again every time refreshPermissions() resolves from
   // render()'s background refetch, so an admin's edit reaches an
   // already-open session's nav without needing a logout.
@@ -484,8 +486,8 @@ const App = {
     document.getElementById('sideName').textContent = user.name;
     document.getElementById('sideRole').textContent = API.roleLabel(user.role);
     document.getElementById('sideAvatar').textContent = (user.name[0] || '?').toUpperCase();
-    // fetch the grid before the first nav build so it isn't drawn once
-    // unfiltered and then immediately rebuilt
+    // fetch this user's enabled pages before the first nav build so it
+    // isn't drawn once unfiltered and then immediately rebuilt
     await this.refreshPermissions();
     const nav = this.renderNav(user);
     const def = nav[0].to;
@@ -661,10 +663,10 @@ const App = {
     if (this.checkResetPasswordRoute()) return;
     const u = API.user;
     if (!u) return this.showLogin();
-    // Refetch the grid in the background on every navigation (fire-and-
-    // forget — must not block this route's render) so an admin's edit
-    // reaches this role's nav on its very next click, without logout. Once
-    // it resolves, rebuild the sidebar from the fresh grid.
+    // Refetch this user's enabled pages in the background on every
+    // navigation (fire-and-forget — must not block this route's render) so
+    // an admin's edit reaches this role's nav on its very next click,
+    // without logout. Once it resolves, rebuild the sidebar from it.
     this.refreshPermissions().then(() => this.renderNav(u));
     const parts = this.hashRoute().split('/');
     let route = parts[0] || 'dashboard';

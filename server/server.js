@@ -2994,6 +2994,17 @@ async function handleApi(req, res, url) {
     permissions.setPermissionsGrid(grid, user);
     return json(res, 200, { ok: true });
   }
+  // ---- a caller's own enabled pages — open to any authenticated user, no
+  // role restriction, unlike the admin-only grid routes above. By
+  // construction this can only ever return the caller's own role's data
+  // (same self-scoped-data pattern as /kpis's customer/agent branches,
+  // /profile, /home), so there's no privilege concern in leaving this open.
+  // This is what lets a non-admin role's own frontend learn about an admin's
+  // live edit (see web/app.js's refreshPermissions) without logging out. ----
+  if (method === 'GET' && parts[1] === 'my-pages' && parts.length === 2) {
+    if (!user) return err(res, 401, 'Not authenticated');
+    return json(res, 200, { pages: permissions.PAGE_KEYS.filter(p => permissions.canAccessPage(user.role, p)) });
+  }
 
   // ---- AI settings (Gemini key) ----
   if (method === 'POST' && parts[1] === 'settings' && parts.length === 2) {

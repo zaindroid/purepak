@@ -1695,7 +1695,10 @@ async function handleApi(req, res, url) {
 
   // ---- customers ----
   if (method === 'GET' && parts[1] === 'customers') {
-    permissions.requirePage(user, 'customers');
+    const canOrderCreatorPick = ['admin', 'manager', 'shop_manager', 'agent'].includes(user.role) && permissions.canAccessPage(user.role, 'orders');
+    if (!permissions.canAccessPage(user.role, 'customers') && !canOrderCreatorPick) {
+      throw httpError(403, 'Forbidden: no access to customers');
+    }
     if (user.role === 'agent') {
       return json(res, 200, db.prepare(`SELECT c.*,
                                         (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=? AND o.status<>'cancelled') AS orders_count,
@@ -2172,7 +2175,9 @@ async function handleApi(req, res, url) {
 
   // ---- vehicle registry (fleet a driver picks from when logging a trip) ----
   if (method === 'GET' && parts[1] === 'vehicles' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
+    if (!['admin', 'manager', 'shop_manager', 'delivery'].includes(user?.role) && !permissions.canAccessPage(user?.role, 'vehicle-logs')) {
+      return err(res, user ? 403 : 401, user ? 'Forbidden' : 'Not authenticated');
+    }
     let sql = 'SELECT * FROM vehicles';
     if (url.searchParams.get('all') !== '1') sql += ' WHERE active=1';
     sql += ' ORDER BY name';

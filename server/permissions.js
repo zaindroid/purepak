@@ -15,7 +15,8 @@ module.exports = function createPermissions(db, { httpError, audit }) {
     return role === 'admin' || cache.has(role + ':' + page);
   }
   function requirePage(user, page) {
-    if (!user || !canAccessPage(user.role, page)) throw httpError(403, 'Forbidden: no access to ' + page);
+    if (!user) throw httpError(401, 'Not authenticated');
+    if (!canAccessPage(user.role, page)) throw httpError(403, 'Forbidden: no access to ' + page);
   }
   function getPermissionsGrid() {
     const grid = {};
@@ -32,9 +33,16 @@ module.exports = function createPermissions(db, { httpError, audit }) {
     }
     const del = db.prepare('DELETE FROM role_permissions WHERE role=?');
     const ins = db.prepare('INSERT INTO role_permissions(role,page,enabled) VALUES (?,?,1)');
-    for (const role of ROLES) {
-      del.run(role);
-      for (const p of PAGE_KEYS) if (grid[role] && grid[role][p]) ins.run(role, p);
+    db.exec('BEGIN');
+    try {
+      for (const role of ROLES) {
+        del.run(role);
+        for (const p of PAGE_KEYS) if (grid[role] && grid[role][p]) ins.run(role, p);
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
     }
     reload();
     audit(actorUser, 'permissions.update', 'role_permissions', null,

@@ -90,12 +90,16 @@ async function main() {
   r = await api('GET', '/api/production', { token: T.shop_manager });
   check('GET /api/production as shop_manager -> 403', r.status === 403, 'status=' + r.status);
 
-  // ---- GET /api/customers: 200 for admin/agent, 403 for manager, shop_manager, finance ----
-  for (const role of ['admin', 'agent']) {
+  // ---- GET /api/customers: 200 for admin/agent/manager/shop_manager (the
+  // latter two via the order-creator-pick branch -- they have 'orders', not
+  // 'customers' -- see Fix 1 of the final-review fix wave), 403 for finance
+  // (has 'orders' too, but isn't one of the roles eligible for that branch)
+  // and for employee/labour (have neither 'orders' nor 'customers') ----
+  for (const role of ['admin', 'agent', 'manager', 'shop_manager']) {
     r = await api('GET', '/api/customers', { token: T[role] });
     check(`GET /api/customers as ${role} -> 200`, r.status === 200, 'status=' + r.status);
   }
-  for (const role of ['manager', 'shop_manager', 'finance']) {
+  for (const role of ['finance', 'employee', 'labour']) {
     r = await api('GET', '/api/customers', { token: T[role] });
     check(`GET /api/customers as ${role} -> 403`, r.status === 403, 'status=' + r.status);
   }
@@ -133,25 +137,31 @@ async function main() {
   check('GET /api/payment-methods as employee -> 403', r.status === 403, 'status=' + r.status);
 
   // ---- Step 5: a grant actually grants (PUT /api/permissions as admin, then re-check, then revert) ----
+  // Uses finance, not shop_manager: shop_manager already reaches GET
+  // /api/customers via the order-creator-pick branch (it has 'orders'),
+  // so granting it 'customers' wouldn't change its observed status and
+  // wouldn't actually exercise the grant path. finance has 'orders' too
+  // but is excluded from that branch's eligible-roles list, so it still
+  // starts at 403 and a 'customers' grant is what flips it to 200.
   const before = await api('GET', '/api/permissions', { token: T.admin });
   const originalGrid = before.data.grid;
-  r = await api('GET', '/api/customers', { token: T.shop_manager });
-  check('pre-grant: GET /api/customers as shop_manager -> 403', r.status === 403, 'status=' + r.status);
+  r = await api('GET', '/api/customers', { token: T.finance });
+  check('pre-grant: GET /api/customers as finance -> 403', r.status === 403, 'status=' + r.status);
 
   const granted = JSON.parse(JSON.stringify(originalGrid));
-  granted.shop_manager.customers = true;
+  granted.finance.customers = true;
   r = await api('PUT', '/api/permissions', { token: T.admin, body: { grid: granted } });
-  check('PUT granting shop_manager.customers -> 200', r.status === 200, 'status=' + r.status);
+  check('PUT granting finance.customers -> 200', r.status === 200, 'status=' + r.status);
 
-  r = await api('GET', '/api/customers', { token: T.shop_manager });
-  check('post-grant: GET /api/customers as shop_manager -> 200', r.status === 200, 'status=' + r.status);
+  r = await api('GET', '/api/customers', { token: T.finance });
+  check('post-grant: GET /api/customers as finance -> 200', r.status === 200, 'status=' + r.status);
 
   // revert so the script is repeatable
   r = await api('PUT', '/api/permissions', { token: T.admin, body: { grid: originalGrid } });
   check('PUT reverting grid -> 200', r.status === 200, 'status=' + r.status);
 
-  r = await api('GET', '/api/customers', { token: T.shop_manager });
-  check('post-revert: GET /api/customers as shop_manager -> 403', r.status === 403, 'status=' + r.status);
+  r = await api('GET', '/api/customers', { token: T.finance });
+  check('post-revert: GET /api/customers as finance -> 403', r.status === 403, 'status=' + r.status);
 
   console.log(fails ? `\n${fails} FAILED` : '\nALL CHECKS PASSED');
   process.exit(fails ? 1 : 0);

@@ -463,7 +463,13 @@ const App = {
   // render()'s background refetch, so an admin's edit reaches an
   // already-open session's nav without needing a logout.
   renderNav(user) {
-    const nav = navFor(user.role, this.permissions);
+    // defensive: an empty `pages` array (role saved with zero enabled pages)
+    // should be unreachable under the seeded system -- setPermissionsGrid
+    // rejects a zero-page save -- but if it ever happens, fall back to the
+    // role's full hardcoded nav catalog rather than leaving nav empty and
+    // crashing enter()'s `nav[0].to` lookup below.
+    let nav = navFor(user.role, this.permissions);
+    if (nav.length === 0) nav = navFor(user.role, null);
     document.getElementById('nav').innerHTML = nav.map((n, i) => {
       const divider = n.section && n.section !== (nav[i - 1] && nav[i - 1].section)
         ? `<div class="nav-section">${n.section}</div>` : '';

@@ -543,7 +543,7 @@ async function modalAgentRates(agentId, agentName) {
 
 // ================= ADMIN =================
 async function viewAdminDashboard() {
-  const [k, monthlyRaw, top, orders, stockProducts] = await Promise.all([API.kpis(), API.monthly(), API.topCustomers(), API.orders(), API.products()]);
+  const [k, monthlyRaw, top, orders, stockProducts] = await Promise.all([API.kpis(), API.monthly().catch(() => []), API.topCustomers().catch(() => []), API.orders(), API.products()]);
   // only show the trend chart once there's more than one month of real history;
   // a row of empty bars reads as "broken", not "new business"
   const monthly = (monthlyRaw || []).filter(m => (m.income || 0) > 0 || (m.expense || 0) > 0);
@@ -1039,7 +1039,7 @@ function modalComposeMail(prefillTo) {
 
 // ================= AGENT =================
 async function viewAgentDashboard() {
-  const [k, orders] = await Promise.all([API.kpis(), API.orders()]);
+  const [k, orders] = await Promise.all([API.kpis(), API.orders().catch(() => [])]);
   return `
   <div class="page-head"><h1>Hello, ${API.esc(API.user.name.split(' ')[0])}</h1><button class="btn primary sm" data-act="new-order">+ New order</button></div>
   <div class="grid kpis">
@@ -1174,7 +1174,7 @@ async function viewAgents() {
 // ================= FINANCE =================
 async function viewFinanceDashboard() {
   const month = new Date().toISOString().slice(0, 7);
-  const [sum, monthlyRaw, orders] = await Promise.all([API.ledgerSummary(month), API.monthly(), API.orders()]);
+  const [sum, monthlyRaw, orders] = await Promise.all([API.ledgerSummary(month), API.monthly(), API.orders().catch(() => [])]);
   const monthly = (monthlyRaw || []).filter(m => (m.income || 0) > 0 || (m.expense || 0) > 0);
   const showTrend = monthly.length >= 2;
   const dueOrders = orders.filter(o => o.payment_status !== 'paid' && o.status !== 'cancelled');

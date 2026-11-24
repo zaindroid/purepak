@@ -7,9 +7,11 @@ const zlib = require('zlib');
 const { init, verifyPassword, hashPassword, DB_PATH, RESTORE_PENDING, TEST_ACCOUNTS } = require('./db');
 const mail = require('./mail');
 const cpanel = require('./cpanel');
+const createPermissions = require('./permissions');
 
 const PORT = Number(process.env.PORT || 4310);
 const { db } = init();
+const permissions = createPermissions(db, { httpError, audit });
 const WEB_ROOT = path.join(__dirname, '..', 'web');
 // receipt images live under the data dir (a mounted volume in production) — the
 // SAME path must be used to write, read and delete them, or images 404.
@@ -2967,6 +2969,27 @@ async function handleApi(req, res, url) {
     json(res, 200, { ok: true, message: 'Restore staged — the app is restarting to apply it. Give it about a minute.' });
     setTimeout(() => process.exit(0), 800); // flush the response first
     return;
+  }
+
+  // ---- role permissions grid (admin-only; deliberately NOT gated by the permission
+  // system it configures, so an admin can never lock themselves out of this screen) ----
+  if (method === 'GET' && parts[1] === 'permissions' && parts.length === 2) {
+    requireRole(user, ['admin']);
+    return json(res, 200, { grid: permissions.getPermissionsGrid(), pages: permissions.PAGE_KEYS });
+  }
+  if (method === 'PUT' && parts[1] === 'permissions' && parts.length === 2) {
+    requireRole(user, ['admin']);
+    const b = await readBody(req);
+    const grid = b.grid || {};
+    for (const role of Object.keys(grid)) {
+      for (const page of Object.keys(grid[role])) {
+        if (!permissions.PAGE_KEYS.includes(page)) return err(res, 400, `Unknown page: ${page}`);
+      }
+    }
+    // setPermissionsGrid throws httpError(400, ...) on a zero-page save; the top-level
+    // handler turns that into a 400 response, same as every other route.
+    permissions.setPermissionsGrid(grid, user);
+    return json(res, 200, { ok: true });
   }
 
   // ---- AI settings (Gemini key) ----

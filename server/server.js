@@ -1639,7 +1639,7 @@ async function handleApi(req, res, url) {
                          JOIN users u ON u.id=pe.labour_user_id
                          LEFT JOIN users au ON au.id=pe.approved_by`;
   if (method === 'GET' && parts[1] === 'production') {
-    requireRole(user, ['admin', 'manager', 'labour']);
+    permissions.requirePage(user, 'production');
     let sql = Q_PRODUCTION + ' WHERE 1=1';
     const args = [];
     if (user.role === 'labour') { sql += ' AND pe.labour_user_id=?'; args.push(user.id); }
@@ -1695,7 +1695,7 @@ async function handleApi(req, res, url) {
 
   // ---- customers ----
   if (method === 'GET' && parts[1] === 'customers') {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance']);
+    permissions.requirePage(user, 'customers');
     if (user.role === 'agent') {
       return json(res, 200, db.prepare(`SELECT c.*,
                                         (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.agent_id=? AND o.status<>'cancelled') AS orders_count,
@@ -1841,7 +1841,7 @@ async function handleApi(req, res, url) {
 
   // ---- agent-specific rates (markup commission, per agent per product) ----
   if (method === 'GET' && parts[1] === 'agent-prices') {
-    requireRole(user, ['admin', 'manager', 'finance', 'agent']);
+    permissions.requirePage(user, user.role === 'agent' ? 'orders' : 'agents');
     const agentId = user.role === 'agent' ? user.agent_id : Number(url.searchParams.get('agent_id'));
     if (!agentId) return err(res, 400, 'agent_id required');
     if (user.role === 'agent' && agentId !== user.agent_id) return err(res, 403, 'Forbidden');
@@ -1882,14 +1882,14 @@ async function handleApi(req, res, url) {
 
   // ---- orders ----
   if (method === 'GET' && parts[1] === 'orders' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer']);
+    permissions.requirePage(user, 'orders');
     const filter = { role: user.role, status: url.searchParams.get('status') };
     if (user.role === 'customer') filter.customerId = user.customer_id;
     if (user.role === 'agent') filter.agentId = user.agent_id;
     return json(res, 200, listOrders(filter));
   }
   if (method === 'GET' && parts[1] === 'orders' && parts.length === 3 && !isNaN(+parts[2])) {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'agent', 'finance', 'delivery', 'customer']);
+    permissions.requirePage(user, 'orders');
     const o = db.prepare(Q.orders + ' WHERE o.id=?').get(+parts[2]);
     if (!o) return err(res, 404, 'Order not found');
     if (user.role === 'customer' && o.customer_id !== user.customer_id) return err(res, 403, 'Forbidden');
@@ -2052,7 +2052,7 @@ async function handleApi(req, res, url) {
 
   // ---- payment methods + the business's receiving accounts ----
   if (method === 'GET' && parts[1] === 'payment-methods') {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'finance', 'agent', 'customer']);
+    permissions.requirePage(user, ['admin', 'manager'].includes(user.role) ? 'payments' : 'orders');
     return json(res, 200, { methods: PAY_METHODS, accounts: paymentAccounts() });
   }
   if (method === 'POST' && parts[1] === 'payment-methods') {
@@ -2075,7 +2075,7 @@ async function handleApi(req, res, url) {
 
   // ---- deliveries ----
   if (method === 'GET' && parts[1] === 'deliveries' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery', 'finance']);
+    permissions.requirePage(user, 'deliveries');
     const filter = {};
     const st = url.searchParams.get('status');
     if (st) filter.status = st;
@@ -2084,7 +2084,7 @@ async function handleApi(req, res, url) {
 
   // ---- smart route plan: optimise active stops from rider's GPS (or depot) ----
   if (method === 'GET' && parts[1] === 'route-plan' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'delivery']);
+    permissions.requirePage(user, 'route');
     const sLat = url.searchParams.get('lat');
     const sLng = url.searchParams.get('lng');
     const open = listDeliveries({}).filter(d => d.status === 'pending' || d.status === 'out_for_delivery');
@@ -2104,7 +2104,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, plan);
   }
   if (method === 'GET' && parts[1] === 'deliveries' && parts.length === 3 && !isNaN(+parts[2])) {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
+    permissions.requirePage(user, 'deliveries');
     const d = db.prepare(`SELECT d.*, c.name customer, c.address customer_address, c.phone customer_phone
                           FROM deliveries d JOIN orders o ON o.id=d.order_id JOIN customers c ON c.id=o.customer_id
                           WHERE d.id=?`).get(+parts[2]);
@@ -2205,7 +2205,7 @@ async function handleApi(req, res, url) {
 
   // ---- vehicle travel logs (daily km per driver/vehicle, audit record) ----
   if (method === 'GET' && parts[1] === 'vehicle-logs' && parts.length === 2) {
-    requireRole(user, ['admin', 'manager', 'shop_manager', 'delivery']);
+    permissions.requirePage(user, 'vehicle-logs');
     let sql = `SELECT vl.*, u.name driver_name, r.name recorded_by_name, v.name vehicle_name, v.plate_no vehicle_plate
                FROM vehicle_logs vl JOIN users u ON u.id = vl.driver_user_id
                LEFT JOIN users r ON r.id = vl.recorded_by
@@ -2258,7 +2258,7 @@ async function handleApi(req, res, url) {
 
   // ---- agents ----
   if (method === 'GET' && parts[1] === 'agents') {
-    requireRole(user, ['admin', 'manager', 'finance']);
+    permissions.requirePage(user, 'agents');
     const rows = db.prepare(`SELECT a.*,
       (SELECT COUNT(*) FROM orders o WHERE o.agent_id=a.id AND o.status<>'cancelled') AS orders_count,
       (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.agent_id=a.id AND o.status<>'cancelled') AS sales,
@@ -2305,7 +2305,7 @@ async function handleApi(req, res, url) {
 
   // ---- commissions ----
   if (method === 'GET' && parts[1] === 'commissions') {
-    requireRole(user, ['admin', 'manager', 'agent', 'finance']);
+    permissions.requirePage(user, user.role === 'agent' ? 'commissions' : 'agents');
     const args = [];
     let sql = `SELECT com.*, c.name AS customer, o.total AS order_total, a.name AS agent_name
                FROM commissions com LEFT JOIN orders o ON o.id=com.order_id

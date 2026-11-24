@@ -43,12 +43,27 @@ async function main() {
   }
 
   // ---- GET /api/kpis: 200 for admin/manager/finance/agent (today), 403 for shop_manager/employee/labour ----
-  // delivery and customer are allowed by today's role array but have no
-  // 'dashboard' nav entry (web/views.js navFor()) — per Task 1's seed table
-  // they are NOT seeded for 'dashboard'. This block checks TODAY'S actual
-  // 200 for them; a separate post-conversion block (run after Step 3) flips
-  // the expectation to 403 for these two — this is the one place this task
-  // deliberately tightens an already-shipped 200 into a 403.
+  // delivery is allowed by today's hardcoded role array but has no
+  // 'dashboard' nav entry (web/views.js navFor()) and no frontend consumer
+  // at all — per Task 1's seed table it is NOT seeded for 'dashboard'. This
+  // block checks TODAY'S actual 200 for delivery pre-conversion; a separate
+  // post-conversion block (run after Step 3) flips the expectation to 403 —
+  // this is the one place this task deliberately tightens an
+  // already-shipped 200 into a 403, verified inert (no page calls
+  // API.kpis() as delivery).
+  //
+  // customer is DIFFERENT and is handled separately below, not in this
+  // branch: GET /kpis branches by role for data reasons (same dual-purpose
+  // shape as agent-prices/commissions/payment-methods) — the customer
+  // branch returns a self-scoped order/spend/due summary, the same kind of
+  // own-data view as /profile or /home, which the plan exempts from any
+  // backend page gate. web/views.js calls API.kpis() for a customer from
+  // viewCustomerHome (no .catch — a 403 there would break the whole page)
+  // and from viewOrders's customer branch (silently defaults `due` to 0 on
+  // error, which would wrongly show a customer who owes money as "all
+  // paid"). So customer must stay 200 for GET /kpis both before AND after
+  // the conversion — the server handler returns the customer's self-scoped
+  // summary before the permissions.requirePage('dashboard') gate even runs.
   for (const role of ['admin', 'manager', 'finance', 'agent']) {
     const r = await api('GET', '/api/kpis', { token: T[role] });
     check(`GET /api/kpis as ${role} -> 200`, r.status === 200, 'status=' + r.status);
@@ -57,18 +72,21 @@ async function main() {
     const r = await api('GET', '/api/kpis', { token: T[role] });
     check(`GET /api/kpis as ${role} -> 403`, r.status === 403, 'status=' + r.status);
   }
+  {
+    // customer: always 200, pre- and post-conversion (self-scoped branch,
+    // never gated by 'dashboard' — see comment block above)
+    const r = await api('GET', '/api/kpis', { token: T.customer });
+    check(`GET /api/kpis as customer -> 200 (self-scoped branch, never gated)`, r.status === 200, 'status=' + r.status);
+  }
   if (!process.env.PP3B_POST) {
     // pre-conversion baseline only
-    for (const role of ['delivery', 'customer']) {
-      const r = await api('GET', '/api/kpis', { token: T[role] });
-      check(`[pre] GET /api/kpis as ${role} -> 200 (today's known-wider-than-seed case)`, r.status === 200, 'status=' + r.status);
-    }
+    const r = await api('GET', '/api/kpis', { token: T.delivery });
+    check(`[pre] GET /api/kpis as delivery -> 200 (today's known-wider-than-seed case)`, r.status === 200, 'status=' + r.status);
   } else {
-    // post-conversion: deliberate, documented tightening (see Step 3/4)
-    for (const role of ['delivery', 'customer']) {
-      const r = await api('GET', '/api/kpis', { token: T[role] });
-      check(`[post] GET /api/kpis as ${role} -> 403 (intentional tightening: no 'dashboard' nav entry, not seeded)`, r.status === 403, 'status=' + r.status);
-    }
+    // post-conversion: deliberate, documented tightening (see Step 3/4) —
+    // verified inert: delivery has zero kpis consumers in web/views.js
+    const r = await api('GET', '/api/kpis', { token: T.delivery });
+    check(`[post] GET /api/kpis as delivery -> 403 (intentional tightening: no 'dashboard' nav entry, not seeded, no frontend consumer)`, r.status === 403, 'status=' + r.status);
   }
 
   // ---- GET /api/ledger, /api/ledger/summary, /api/analytics/monthly, /api/analytics/top-customers: 200 for admin/manager/finance, 403 for agent ----
@@ -99,6 +117,29 @@ async function main() {
   {
     const r = await api('GET', '/api/receipts', { token: T.shop_manager });
     check('GET /api/receipts as shop_manager -> 403', r.status === 403, 'status=' + r.status);
+  }
+
+  // ---- GET /api/receipts/:id (the receipt-image route): gated the same way as the list route ----
+  // Create a receipt with an image via the API first (demo seed data has no
+  // receipt rows), then confirm the image route is gated by 'receipts' too
+  // (it uses the same `user || tokenDerivedUser` resolution as before —
+  // only the role-array check was swapped for requirePage).
+  {
+    const fakeImage = 'A'.repeat(1336); // >=1000 chars, base64-charset, length%4===0
+    const created = await api('POST', '/api/receipts', {
+      token: T.admin,
+      body: { kind: 'expense', image: fakeImage, filename: 'test-receipt.jpg', mimetype: 'image/jpeg', amount: 10 },
+    });
+    check('POST /api/receipts as admin -> 201 (setup for image-route test)', created.status === 201, 'status=' + created.status);
+    const receiptId = created.data && created.data.id;
+    if (receiptId) {
+      const r1 = await api('GET', `/api/receipts/${receiptId}`, { token: T.finance });
+      check(`GET /api/receipts/${receiptId} (image) as finance -> 200`, r1.status === 200, 'status=' + r1.status);
+      const r2 = await api('GET', `/api/receipts/${receiptId}`, { token: T.shop_manager });
+      check(`GET /api/receipts/${receiptId} (image) as shop_manager -> 403`, r2.status === 403, 'status=' + r2.status);
+    } else {
+      check('GET /api/receipts/:id (image) gating — skipped, no receipt id from setup', false, JSON.stringify(created.data));
+    }
   }
 
   // ---- GET /api/audit, /api/audit/verify: 200 for admin/manager, 403 for finance ----

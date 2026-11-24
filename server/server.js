@@ -3028,11 +3028,12 @@ async function handleApi(req, res, url) {
 
   // ---- kpis / analytics ----
   if (method === 'GET' && parts[1] === 'kpis') {
-    permissions.requirePage(user, 'dashboard');
-    if (user.role === 'customer') {
+    if (user && user.role === 'customer') {
+      // self-scoped, same as profile/home — not gated by 'dashboard'
       const mine = db.prepare('SELECT COUNT(*) c, COALESCE(SUM(total),0) t, COALESCE(SUM(total-paid),0) due FROM orders WHERE customer_id=? AND status<>\'cancelled\'').get(user.customer_id);
       return json(res, 200, { my_orders: mine.c, lifetime_spend: Math.round(mine.t), due: Math.round(mine.due) });
     }
+    permissions.requirePage(user, 'dashboard');
     if (user.role === 'agent') {
       const k = db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(total),0) t FROM orders WHERE agent_id=? AND status<>'cancelled'`).get(user.agent_id);
       const due = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM commissions WHERE agent_id=? AND status='accrued'`).get(user.agent_id).v;

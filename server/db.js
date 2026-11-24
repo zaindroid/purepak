@@ -591,7 +591,7 @@ function migrate(db) {
       delivery: ['route','deliveries','vehicle-logs','receipts','email'],
       employee: ['profile','email'],
       labour: ['production','email'],
-      customer: ['home','orders','profile'],
+      customer: ['home','orders','profile','email'],
     };
     for (const [role, pages] of Object.entries(SEED)) for (const page of pages) insRp.run(role, page);
   }

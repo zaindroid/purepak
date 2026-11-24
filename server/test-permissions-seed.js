@@ -13,6 +13,7 @@ check('manager lacks customers', !perms.canAccessPage('manager', 'customers'));
 check('employee lacks orders (the known dead nav link)', !perms.canAccessPage('employee', 'orders'));
 check('employee has email', perms.canAccessPage('employee', 'email'));
 check('customer has home/orders/profile', perms.canAccessPage('customer', 'home') && perms.canAccessPage('customer', 'orders') && perms.canAccessPage('customer', 'profile'));
+check('customer has email (preserves pre-gate ownership-scoped mailbox access)', perms.canAccessPage('customer', 'email'));
 check('unseeded combo defaults to false', !perms.canAccessPage('shop_manager', 'payroll'));
 check('unknown role defaults to false, not throws', !perms.canAccessPage('nonexistent_role', 'orders'));
 

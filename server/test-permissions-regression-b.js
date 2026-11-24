@@ -142,39 +142,31 @@ async function main() {
   }
 
   // ---- GET /api/mailbox, /api/mailbox/messages, /api/mailbox/messages/:id: 200 for every role today (no gate exists yet) ----
-  // Pre-conversion baseline for all 9 roles. Post-conversion (PP3B_POST=1),
-  // this stays 200 for 8 of the 9 roles since 'email' is seeded true for
-  // manager/shop_manager/finance/agent/delivery/employee/labour (and admin
-  // always bypasses) — EXCEPT customer, which is NOT seeded 'email' in
-  // Task 1's seed table and has no 'email' nav entry either (web/views.js
-  // navFor().customer has only home/orders/profile). This is the SAME
-  // "backend wider than seed" pattern the brief documents for kpis, found
-  // independently here on the brand-new email gate: customer goes from a
-  // real pre-change 200 to 403 after Step 3. See the task report for detail.
+  // Pre-conversion baseline for all 9 roles.
+  //
+  // An earlier version of this task found that the brief's claim "'email'
+  // is seeded true for every role" was false for 'customer' (Task 1's seed
+  // table had customer: ['home','orders','profile'], no 'email'), which
+  // would have newly 403'd customer on these three routes after adding the
+  // gate — a real regression against the plan's unconditional "seed email
+  // = true for every role (preserves today's behavior exactly)" constraint,
+  // not an intentional tightening like the kpis/dashboard case. That was a
+  // seed-data bug, fixed directly in server/db.js (customer now includes
+  // 'email'), not worked around here. So post-conversion (PP3B_POST=1),
+  // this now stays exactly the same for all 9 roles, customer included —
+  // no role-specific branching needed any more.
   const ALL_ROLES = ['admin', 'manager', 'shop_manager', 'finance', 'agent', 'delivery', 'employee', 'labour', 'customer'];
   for (const role of ALL_ROLES) {
     const r = await api('GET', '/api/mailbox', { token: T[role] });
-    if (!process.env.PP3B_POST || role !== 'customer') {
-      check(`GET /api/mailbox as ${role} -> 200`, r.status === 200, 'status=' + r.status);
-    } else {
-      check(`[post] GET /api/mailbox as customer -> 403 (not seeded 'email', no nav entry)`, r.status === 403, 'status=' + r.status);
-    }
+    check(`GET /api/mailbox as ${role} -> 200`, r.status === 200, 'status=' + r.status);
   }
   for (const role of ALL_ROLES) {
     const r = await api('GET', '/api/mailbox/messages', { token: T[role] });
-    if (!process.env.PP3B_POST || role !== 'customer') {
-      check(`GET /api/mailbox/messages as ${role} -> 200 or 404 (no mailbox assigned)`, r.status === 200 || r.status === 404, 'status=' + r.status);
-    } else {
-      check(`[post] GET /api/mailbox/messages as customer -> 403 (not seeded 'email', no nav entry)`, r.status === 403, 'status=' + r.status);
-    }
+    check(`GET /api/mailbox/messages as ${role} -> 200 or 404 (no mailbox assigned)`, r.status === 200 || r.status === 404, 'status=' + r.status);
   }
   for (const role of ALL_ROLES) {
     const r = await api('GET', '/api/mailbox/messages/1', { token: T[role] });
-    if (!process.env.PP3B_POST || role !== 'customer') {
-      check(`GET /api/mailbox/messages/1 as ${role} -> 200 or 404 (no mailbox assigned)`, r.status === 200 || r.status === 404, 'status=' + r.status);
-    } else {
-      check(`[post] GET /api/mailbox/messages/1 as customer -> 403 (not seeded 'email', no nav entry)`, r.status === 403, 'status=' + r.status);
-    }
+    check(`GET /api/mailbox/messages/1 as ${role} -> 200 or 404 (no mailbox assigned)`, r.status === 200 || r.status === 404, 'status=' + r.status);
   }
 
   console.log(fails ? `\n${fails} FAILED` : '\nALL CHECKS PASSED');

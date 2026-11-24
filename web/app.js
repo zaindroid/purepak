@@ -707,9 +707,19 @@ const App = {
       if (swapped) applySwap(); // fast render finished before the fade-out window
     };
     try {
-      const renderer = (VIEW[u.role] && VIEW[u.role][route]) || VIEW[u.role][route] || VIEW.admin[route];
-      if (!renderer) throw new Error('No view for ' + route);
-      const html = await renderer(this.ctx);
+      // A role newly granted a page outside its own default catalog (see
+      // navFor's PAGE_NAV_CATALOG merge) has no renderer under VIEW[role] --
+      // fall back to the admin/manager renderer for that page key, since
+      // those two cover the vast majority of page keys. If truly nothing
+      // renders it anywhere, show a minimal placeholder instead of a hard
+      // error -- this shouldn't happen for the 21 real page keys, but a
+      // role granted something genuinely self-scoped-only (e.g. 'profile',
+      // 'home', 'commissions') that neither admin nor manager have a view
+      // for either is exactly the defensive case this guards.
+      const renderer = (VIEW[u.role] && VIEW[u.role][route]) || VIEW.admin[route] || VIEW.manager[route];
+      const html = renderer
+        ? await renderer(this.ctx)
+        : `<div class="page-head"><h1>${API.esc((PAGE_NAV_CATALOG[route] && PAGE_NAV_CATALOG[route].label) || route)}</h1></div><p class="muted">This page doesn't have a dedicated view for your role yet.</p>`;
       paint(html);
     } catch (e) {
       paint(`<div class="empty" style="padding:60px 16px"><div class="em-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>${API.esc(e.message)}</div>`, true);

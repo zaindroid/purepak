@@ -3354,16 +3354,49 @@ const MANAGER_NAV = [
   { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
 ];
+// Canonical icon+label per page key, used only to render a nav entry for a
+// page a role has been granted that isn't in that role's own hardcoded
+// array below (e.g. admin grants finance the 'team' page, which finance's
+// hardcoded nav never listed to begin with) -- see navFor(). Icons/labels
+// here are copied from whichever hardcoded array already uses that page key
+// (usually ADMIN_NAV), for visual consistency rather than inventing new ones.
+const PAGE_NAV_CATALOG = {
+  dashboard: { icon: IC.chart, label: 'Dashboard' },
+  orders: { icon: IC.box, label: 'Orders' },
+  deliveries: { icon: IC.truck, label: 'Deliveries' },
+  route: { icon: IC.route, label: 'Route map' },
+  'vehicle-logs': { icon: IC.route, label: 'Vehicle travel log' },
+  production: { icon: IC.stack, label: 'Production & stock' },
+  customers: { icon: IC.users, label: 'Customers' },
+  agents: { icon: IC.badge, label: 'Agents & commissions' },
+  commissions: { icon: IC.cash, label: 'Commissions' },
+  offers: { icon: IC.megaphone, label: 'Offers' },
+  bookkeeping: { icon: IC.book, label: 'Bookkeeping' },
+  receipts: { icon: IC.receipt, label: 'Receipts' },
+  payments: { icon: IC.wallet, label: 'Payment methods' },
+  payroll: { icon: IC.wallet, label: 'Payroll' },
+  audit: { icon: IC.clip, label: 'Audit trail' },
+  products: { icon: IC.bottle, label: 'Products' },
+  team: { icon: IC.shield, label: 'Team' },
+  email: { icon: IC.mail, label: 'Email' },
+  backups: { icon: IC.database, label: 'Backups' },
+  profile: { icon: IC.users, label: 'My profile' },
+  home: { icon: IC.drop, label: 'Shop' },
+};
 // `pages` is the flat array of this role's own enabled page keys, fetched
-// from GET /api/my-pages (see web/app.js's App.permissions) -- each role's
+// from GET /api/my-pages (see web/app.js's App.permissions). Each role's
 // hardcoded array below is still "the full catalog of what this role's nav
-// could contain"; this filters it down to what's actually enabled right
-// now. admin always gets its full catalog regardless of `pages` (admin is
-// never a row in the role_permissions table -- see server/permissions.js's
-// canAccessPage). When `pages` isn't available yet (first paint before the
-// initial fetch resolves, or a genuine network failure) the full hardcoded
-// catalog is also used, matching this app's behavior before this feature
-// existed.
+// contains by default"; this keeps whichever of those entries are still
+// enabled, AND appends an entry (from PAGE_NAV_CATALOG) for any page in
+// `pages` that isn't already in that hardcoded array -- otherwise a role
+// granted a page outside its own default catalog (the whole point of this
+// feature -- "including granting a role a section it doesn't have today",
+// per the plan's Goal) would have no way to ever reach it. admin always
+// gets its full catalog regardless of `pages` (admin is never a row in the
+// role_permissions table -- see server/permissions.js's canAccessPage).
+// When `pages` isn't available yet (first paint before the initial fetch
+// resolves, or a genuine network failure) the full hardcoded catalog is
+// also used as-is, matching this app's behavior before this feature existed.
 function navFor(role, pages) {
   const N = {
     admin: ADMIN_NAV,
@@ -3409,7 +3442,11 @@ function navFor(role, pages) {
   };
   const list = N[role] || [];
   if (role === 'admin' || !pages) return list;
-  return list.filter(item => pages.includes(item.to));
+  const kept = list.filter(item => pages.includes(item.to));
+  const existingKeys = new Set(list.map(item => item.to));
+  const added = pages.filter(p => !existingKeys.has(p) && PAGE_NAV_CATALOG[p])
+    .map(p => ({ to: p, ...PAGE_NAV_CATALOG[p] }));
+  return [...kept, ...added];
 }
 
 // view router: route key -> renderer (ctx = {params})

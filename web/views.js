@@ -3084,7 +3084,7 @@ async function viewProducts() {
         ${V.m('Size', sizeLabel(p.size_ml), 'tv num')}
         ${V.m('Price', API.fmtMoney(p.price), 'tv num')}
         ${V.m('Status', p.active ? '<span class="chip approved">Active</span>' : '<span class="chip cancelled">Off</span>', '')}
-        ${canEdit ? `<td class="cell-act"><button class="btn ghost sm" data-act="edit-product" data-id="${p.id}">Edit</button> <button class="btn sm ${p.active ? 'ghost' : 'primary'}" data-act="toggle-product" data-id="${p.id}" data-active="${p.active ? 1 : 0}">${p.active ? 'Pause' : 'Enable'}</button></td>` : ''}
+        ${canEdit ? `<td class="cell-act"><button class="btn ghost sm" data-act="edit-product" data-id="${p.id}">Edit</button> <button class="btn sm ${p.active ? 'ghost' : 'primary'}" data-act="toggle-product" data-id="${p.id}" data-active="${p.active ? 1 : 0}">${p.active ? 'Pause' : 'Enable'}</button> <button class="btn ghost sm" data-act="delete-product" data-id="${p.id}" data-name="${API.esc(p.name)}">Remove</button></td>` : ''}
       </tr>`).join('')}</tbody></table></div></div>
     <div class="sec-t">Price list by customer type</div>
     <div class="matrix-wrap"><table class="matrix">

@@ -1628,6 +1628,26 @@ async function handleApi(req, res, url) {
     sseBroadcast('pricing'); // price / availability change reaches every open shop live
     return json(res, 200, db.prepare('SELECT * FROM products WHERE id=?').get(+parts[2]));
   }
+  if (method === 'DELETE' && parts[1] === 'products' && parts.length === 3 && !isNaN(+parts[2])) {
+    requireRole(user, ['admin', 'manager']);
+    const pid = +parts[2];
+    const cur = db.prepare('SELECT * FROM products WHERE id=?').get(pid);
+    if (!cur) return err(res, 404, 'Product not found');
+    // order_items has no ON DELETE on product_id (unlike agent_prices/production_entries,
+    // which cascade) — a product that's ever actually been ordered must stay as a record
+    // for that order's history; Pause is the right tool for "stop selling this", not Delete.
+    const used = db.prepare('SELECT COUNT(*) AS c FROM order_items WHERE product_id=?').get(pid).c;
+    if (used > 0) return err(res, 400, `Can't delete — ${used} order(s) reference this product. Use Pause instead to hide it without losing order history.`);
+    db.prepare('DELETE FROM products WHERE id=?').run(pid);
+    if (fs.existsSync(PRODUCT_IMG_DIR)) {
+      fs.readdirSync(PRODUCT_IMG_DIR).filter(f => f.startsWith('p' + pid + '.')).forEach(f => {
+        try { fs.unlinkSync(path.join(PRODUCT_IMG_DIR, f)); } catch {}
+      });
+    }
+    audit(user, 'product.delete', 'product', pid, `Product removed: ${cur.name}`, cur, null);
+    sseBroadcast('pricing');
+    return json(res, 200, { ok: true });
+  }
 
   // ---- production (labour logs output, admin/manager approve into stock) ----
   const Q_PRODUCTION = `SELECT pe.*, p.name AS product_name, p.size_ml AS product_size_ml,

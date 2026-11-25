@@ -72,6 +72,7 @@ const API = (() => {
     createCustomer: (b) => post('/customers', b),
     updateProduct: (id, b) => patch('/products/' + id, b),
     createProduct: (b) => post('/products', b),
+    deleteProduct: (id) => del('/products/' + id),
     customerTypes: () => g('/customer-types'),
     pricing: () => g('/pricing'),
     savePricing: (rows) => post('/pricing', rows),

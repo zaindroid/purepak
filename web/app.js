@@ -790,6 +790,12 @@ const App = {
         } catch (err) { toast(err.message, 'err'); }
         break;
       }
+      case 'delete-product': stop();
+        if (await confirmDialog({ title: 'Remove product', message: `This permanently removes "${name}" from the catalog. If it's ever been ordered, use Pause instead — removal is blocked once there's order history.`, okLabel: 'Remove', danger: true })) {
+          try { await API.deleteProduct(+id); toast('Product removed'); App.refresh(); }
+          catch (e) { toast(e.message, 'err'); }
+        }
+        break;
       case 'log-production': stop(); modalLogProduction(); break;
       case 'log-vehicle-trip': stop(); modalLogVehicleTrip(); break;
       case 'add-vehicle': stop(); modalAddVehicle(); break;

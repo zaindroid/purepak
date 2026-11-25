@@ -90,6 +90,13 @@ function animateKPIs(root) {
 const App = {
   route: 'dashboard',
   ctx: {},
+  // this user's own enabled pages (a flat array of page keys, from GET
+  // /api/my-pages), used by navFor()/the VIEW router (see views.js) to
+  // filter nav + block stale deep links. null means "not fetched yet" --
+  // navFor() then falls back to the role's full hardcoded nav catalog
+  // (today's pre-this-feature behavior), so a failed fetch is never worse
+  // than before this feature existed.
+  permissions: null,
 
   init() {
     document.getElementById('loginForm').addEventListener('submit', (e) => this.doLogin(e));
@@ -433,24 +440,62 @@ const App = {
     }
   },
 
-  enter(user) {
+  // Fetches this user's own enabled pages (see views.js's navFor/VIEW) so
+  // nav and routing reflect admin's current settings. GET /api/my-pages is
+  // open to any authenticated user (server/server.js) and can only ever
+  // return the caller's own role's data, so this should succeed for every
+  // role; the try/catch is just for a genuine network failure, in which
+  // case navFor() falls back to the role's full hardcoded nav catalog,
+  // matching this feature's pre-existing behavior exactly, so a failed
+  // fetch is never worse than before this feature shipped.
+  async refreshPermissions() {
+    try {
+      const r = await API.getMyPages();
+      this.permissions = r.pages;
+    } catch {
+      this.permissions = null;
+    }
+  },
+
+  // (re)builds the sidebar nav list for `user` from navFor(), using whatever
+  // pages array is currently cached in this.permissions. Called once on login/
+  // restore, and again every time refreshPermissions() resolves from
+  // render()'s background refetch, so an admin's edit reaches an
+  // already-open session's nav without needing a logout.
+  renderNav(user) {
+    // defensive: an empty `pages` array (role saved with zero enabled pages)
+    // should be unreachable under the seeded system -- setPermissionsGrid
+    // rejects a zero-page save -- but if it ever happens, fall back to the
+    // role's full hardcoded nav catalog rather than leaving nav empty and
+    // crashing enter()'s `nav[0].to` lookup below.
+    let nav = navFor(user.role, this.permissions);
+    if (nav.length === 0) nav = navFor(user.role, null);
+    document.getElementById('nav').innerHTML = nav.map((n, i) => {
+      const divider = n.section && n.section !== (nav[i - 1] && nav[i - 1].section)
+        ? `<div class="nav-section">${n.section}</div>` : '';
+      return `${divider}<a href="#/${n.to}" data-nav="${n.to}"><span class="ni">${n.icon}</span>${n.label}</a>`;
+    }).join('');
+    document.querySelectorAll('#nav a').forEach(a => {
+      a.classList.toggle('active', a.dataset.nav === this.route);
+      a.addEventListener('click', () => {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('scrim').classList.add('hidden');
+      });
+    });
+    return nav;
+  },
+
+  async enter(user) {
     this.hideSplash();
     document.getElementById('login').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     document.getElementById('sideName').textContent = user.name;
     document.getElementById('sideRole').textContent = API.roleLabel(user.role);
     document.getElementById('sideAvatar').textContent = (user.name[0] || '?').toUpperCase();
-    // build nav
-    const nav = navFor(user.role);
-    document.getElementById('nav').innerHTML = nav.map((n, i) => {
-      const divider = n.section && n.section !== (nav[i - 1] && nav[i - 1].section)
-        ? `<div class="nav-section">${n.section}</div>` : '';
-      return `${divider}<a href="#/${n.to}" data-nav="${n.to}"><span class="ni">${n.icon}</span>${n.label}</a>`;
-    }).join('');
-    document.querySelectorAll('#nav a').forEach(a => a.addEventListener('click', () => {
-      document.getElementById('sidebar').classList.remove('open');
-      document.getElementById('scrim').classList.add('hidden');
-    }));
+    // fetch this user's enabled pages before the first nav build so it
+    // isn't drawn once unfiltered and then immediately rebuilt
+    await this.refreshPermissions();
+    const nav = this.renderNav(user);
     const def = nav[0].to;
     this.route = def;
     if (!location.hash || location.hash === '#/') location.hash = '#/' + def;
@@ -580,7 +625,7 @@ const App = {
   // shared by the in-app bell (bellOpen) and a tapped push notification
   // (onPushOpen, below) — same "ref" format either way (e.g. "order#123")
   routeByRef(ref) {
-    const valid = navFor(API.user.role).map(n => n.to);
+    const valid = navFor(API.user.role, this.permissions).map(n => n.to);
     const goto = (...prefs) => { location.hash = '#/' + (prefs.find(p => valid.includes(p)) || valid[0] || 'dashboard'); };
     let m;
     if ((m = /^receipt#(\d+)$/.exec(ref))) {
@@ -624,9 +669,14 @@ const App = {
     if (this.checkResetPasswordRoute()) return;
     const u = API.user;
     if (!u) return this.showLogin();
+    // Refetch this user's enabled pages in the background on every
+    // navigation (fire-and-forget — must not block this route's render) so
+    // an admin's edit reaches this role's nav on its very next click,
+    // without logout. Once it resolves, rebuild the sidebar from it.
+    this.refreshPermissions().then(() => this.renderNav(u));
     const parts = this.hashRoute().split('/');
     let route = parts[0] || 'dashboard';
-    const valid = navFor(u.role).map(n => n.to);
+    const valid = navFor(u.role, this.permissions).map(n => n.to);
     if (!valid.includes(route)) route = valid[0];
     this.route = route;
     this.ctx = { status: parts[1] || '' };
@@ -663,9 +713,19 @@ const App = {
       if (swapped) applySwap(); // fast render finished before the fade-out window
     };
     try {
-      const renderer = (VIEW[u.role] && VIEW[u.role][route]) || VIEW[u.role][route] || VIEW.admin[route];
-      if (!renderer) throw new Error('No view for ' + route);
-      const html = await renderer(this.ctx);
+      // A role newly granted a page outside its own default catalog (see
+      // navFor's PAGE_NAV_CATALOG merge) has no renderer under VIEW[role] --
+      // fall back to the admin/manager renderer for that page key, since
+      // those two cover the vast majority of page keys. If truly nothing
+      // renders it anywhere, show a minimal placeholder instead of a hard
+      // error -- this shouldn't happen for the 21 real page keys, but a
+      // role granted something genuinely self-scoped-only (e.g. 'profile',
+      // 'home', 'commissions') that neither admin nor manager have a view
+      // for either is exactly the defensive case this guards.
+      const renderer = (VIEW[u.role] && VIEW[u.role][route]) || VIEW.admin[route] || VIEW.manager[route];
+      const html = renderer
+        ? await renderer(this.ctx)
+        : `<div class="page-head"><h1>${API.esc((PAGE_NAV_CATALOG[route] && PAGE_NAV_CATALOG[route].label) || route)}</h1></div><p class="muted">This page doesn't have a dedicated view for your role yet.</p>`;
       paint(html);
     } catch (e) {
       paint(`<div class="empty" style="padding:60px 16px"><div class="em-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>${API.esc(e.message)}</div>`, true);
@@ -974,6 +1034,19 @@ const App = {
         } catch (e) { this.toast(e.message, 'err'); }
       }
         break;
+      case 'save-permissions': stop(); {
+        const grid = {};
+        document.querySelectorAll('[data-perm-role]').forEach(inp => {
+          const r = inp.dataset.permRole, p = inp.dataset.permPage;
+          (grid[r] = grid[r] || {})[p] = inp.checked;
+        });
+        try {
+          await API.savePermissions(grid);
+          this.toast('Permissions saved', 'ok');
+          this.refresh(); // re-renders this view AND (via render()'s background
+                           // refreshPermissions) updates this session's own nav
+        } catch (e) { this.toast(e.message, 'err'); } // e.message is the server's own 400 text on a zero-pages rejection
+      } break;
       case 'add-expense': stop(); modalAddLedger('expense'); break;
       case 'add-income': stop(); modalAddLedger('income'); break;
       case 'ledger-void': stop(); modalVoidLedger(+id); break;

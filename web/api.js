@@ -25,6 +25,7 @@ const API = (() => {
   const g = p => req('GET', p);
   const post = (p, b) => req('POST', p, b);
   const patch = (p, b) => req('PATCH', p, b);
+  const put = (p, b) => req('PUT', p, b);
   const del = p => req('DELETE', p);
 
   const fmtMoney = (n, cur = 'Rs') => {
@@ -104,6 +105,13 @@ const API = (() => {
     deleteMailbox: (id) => del('/mailboxes/' + id),
     cpanelEmails: () => g('/cpanel/emails'),
     provisionMailbox: (b) => post('/mailboxes/provision', b),
+    // admin-only role->page grid (see web/views.js's viewPermissions) — used
+    // ONLY by the admin Permissions screen, never for nav/routing
+    getPermissions: () => g('/permissions'),
+    savePermissions: (grid) => put('/permissions', { grid }),
+    // the caller's own enabled pages — any authenticated role may call this;
+    // used by App.refreshPermissions (web/app.js) to drive nav/routing
+    getMyPages: () => g('/my-pages'),
     uploadAndroidApk: (b) => post('/admin/app/android', b),
     createOffer: (b) => post('/offers', b),
     offerAudienceCount: (filters) => post('/offers/audience-count', filters),

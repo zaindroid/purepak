@@ -543,7 +543,7 @@ async function modalAgentRates(agentId, agentName) {
 
 // ================= ADMIN =================
 async function viewAdminDashboard() {
-  const [k, monthlyRaw, top, orders, stockProducts] = await Promise.all([API.kpis(), API.monthly(), API.topCustomers(), API.orders(), API.products()]);
+  const [k, monthlyRaw, top, orders, stockProducts] = await Promise.all([API.kpis(), API.monthly().catch(() => []), API.topCustomers().catch(() => []), API.orders(), API.products()]);
   // only show the trend chart once there's more than one month of real history;
   // a row of empty bars reads as "broken", not "new business"
   const monthly = (monthlyRaw || []).filter(m => (m.income || 0) > 0 || (m.expense || 0) > 0);
@@ -1039,7 +1039,7 @@ function modalComposeMail(prefillTo) {
 
 // ================= AGENT =================
 async function viewAgentDashboard() {
-  const [k, orders] = await Promise.all([API.kpis(), API.orders()]);
+  const [k, orders] = await Promise.all([API.kpis(), API.orders().catch(() => [])]);
   return `
   <div class="page-head"><h1>Hello, ${API.esc(API.user.name.split(' ')[0])}</h1><button class="btn primary sm" data-act="new-order">+ New order</button></div>
   <div class="grid kpis">
@@ -1174,7 +1174,7 @@ async function viewAgents() {
 // ================= FINANCE =================
 async function viewFinanceDashboard() {
   const month = new Date().toISOString().slice(0, 7);
-  const [sum, monthlyRaw, orders] = await Promise.all([API.ledgerSummary(month), API.monthly(), API.orders()]);
+  const [sum, monthlyRaw, orders] = await Promise.all([API.ledgerSummary(month), API.monthly(), API.orders().catch(() => [])]);
   const monthly = (monthlyRaw || []).filter(m => (m.income || 0) > 0 || (m.expense || 0) > 0);
   const showTrend = monthly.length >= 2;
   const dueOrders = orders.filter(o => o.payment_status !== 'paid' && o.status !== 'cancelled');
@@ -1432,6 +1432,38 @@ function initBackupsView() {
       toast(e.message, 'err');
     }
   });
+}
+
+// ---------- permissions: admin-only grid of which role sees which page ----------
+// Canonical display label per page key — independent of any role's own nav
+// label for the same page (e.g. 'agents' is "Agents & commissions" to admin
+// but "My customers"-adjacent framing elsewhere); this is just for the
+// settings-grid row, not real nav.
+const PERM_PAGE_LABELS = {
+  dashboard: 'Dashboard', orders: 'Orders', deliveries: 'Deliveries', route: 'Route map',
+  'vehicle-logs': 'Vehicle travel log', production: 'Production & stock', customers: 'Customers',
+  agents: 'Agents & commissions', commissions: 'Commissions', offers: 'Offers', bookkeeping: 'Bookkeeping',
+  receipts: 'Receipts', payments: 'Payment methods', payroll: 'Payroll', audit: 'Audit trail',
+  products: 'Products', team: 'Team', email: 'Email', backups: 'Backups',
+  profile: 'Profile', home: 'Shop (home)',
+};
+async function viewPermissions() {
+  const { grid, pages } = await API.getPermissions();
+  const roles = Object.keys(grid); // the 8 non-admin roles, as returned by the API
+  return `<div class="page-head"><h1>Permissions</h1></div>
+  <p class="muted" style="margin:-6px 0 14px;font-size:12.5px">Controls which portal sections each role can see. Changes take effect for everyone immediately — no logout needed.</p>
+  <div class="matrix-wrap"><table class="matrix">
+    <thead><tr><th>Page</th>${roles.map(r => `<th>${API.esc(API.roleLabel(r))}</th>`).join('')}<th>Admin</th></tr></thead>
+    <tbody>${pages.map(p => `<tr>
+      <td><b>${API.esc(PERM_PAGE_LABELS[p] || p)}</b></td>
+      ${roles.map(r => `<td class="inp"><input type="checkbox" style="width:auto" data-perm-role="${r}" data-perm-page="${p}" ${grid[r] && grid[r][p] ? 'checked' : ''}></td>`).join('')}
+      <td class="inp"><input type="checkbox" style="width:auto" checked disabled title="Admin always has full access and can't be edited here"></td>
+    </tr>`).join('')}</tbody>
+  </table></div>
+  <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
+    <button class="btn primary" data-act="save-permissions">Save</button>
+    <span class="muted" style="font-size:12px">Each role must keep at least one page enabled.</span>
+  </div>`;
 }
 
 // ---------- payment methods: the business's receiving accounts (admin/manager) ----------
@@ -3292,6 +3324,7 @@ const ADMIN_NAV = [
   { to: 'team', icon: IC.shield, label: 'Team' },
   { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
+  { to: 'permissions', icon: IC.shield, label: 'Permissions' },
 ];
 // Shop manager: a single-purpose profile that only runs the order pipeline —
 // order received -> confirmed -> dispatched -> delivered. No money, catalog,
@@ -3321,7 +3354,50 @@ const MANAGER_NAV = [
   { to: 'email', icon: IC.mail, label: 'Email' },
   { to: 'backups', icon: IC.database, label: 'Backups', section: 'System' },
 ];
-function navFor(role) {
+// Canonical icon+label per page key, used only to render a nav entry for a
+// page a role has been granted that isn't in that role's own hardcoded
+// array below (e.g. admin grants finance the 'team' page, which finance's
+// hardcoded nav never listed to begin with) -- see navFor(). Icons/labels
+// here are copied from whichever hardcoded array already uses that page key
+// (usually ADMIN_NAV), for visual consistency rather than inventing new ones.
+const PAGE_NAV_CATALOG = {
+  dashboard: { icon: IC.chart, label: 'Dashboard' },
+  orders: { icon: IC.box, label: 'Orders' },
+  deliveries: { icon: IC.truck, label: 'Deliveries' },
+  route: { icon: IC.route, label: 'Route map' },
+  'vehicle-logs': { icon: IC.route, label: 'Vehicle travel log' },
+  production: { icon: IC.stack, label: 'Production & stock' },
+  customers: { icon: IC.users, label: 'Customers' },
+  agents: { icon: IC.badge, label: 'Agents & commissions' },
+  commissions: { icon: IC.cash, label: 'Commissions' },
+  offers: { icon: IC.megaphone, label: 'Offers' },
+  bookkeeping: { icon: IC.book, label: 'Bookkeeping' },
+  receipts: { icon: IC.receipt, label: 'Receipts' },
+  payments: { icon: IC.wallet, label: 'Payment methods' },
+  payroll: { icon: IC.wallet, label: 'Payroll' },
+  audit: { icon: IC.clip, label: 'Audit trail' },
+  products: { icon: IC.bottle, label: 'Products' },
+  team: { icon: IC.shield, label: 'Team' },
+  email: { icon: IC.mail, label: 'Email' },
+  backups: { icon: IC.database, label: 'Backups' },
+  profile: { icon: IC.users, label: 'My profile' },
+  home: { icon: IC.drop, label: 'Shop' },
+};
+// `pages` is the flat array of this role's own enabled page keys, fetched
+// from GET /api/my-pages (see web/app.js's App.permissions). Each role's
+// hardcoded array below is still "the full catalog of what this role's nav
+// contains by default"; this keeps whichever of those entries are still
+// enabled, AND appends an entry (from PAGE_NAV_CATALOG) for any page in
+// `pages` that isn't already in that hardcoded array -- otherwise a role
+// granted a page outside its own default catalog (the whole point of this
+// feature -- "including granting a role a section it doesn't have today",
+// per the plan's Goal) would have no way to ever reach it. admin always
+// gets its full catalog regardless of `pages` (admin is never a row in the
+// role_permissions table -- see server/permissions.js's canAccessPage).
+// When `pages` isn't available yet (first paint before the initial fetch
+// resolves, or a genuine network failure) the full hardcoded catalog is
+// also used as-is, matching this app's behavior before this feature existed.
+function navFor(role, pages) {
   const N = {
     admin: ADMIN_NAV,
     manager: MANAGER_NAV,
@@ -3364,7 +3440,13 @@ function navFor(role) {
       { to: 'profile', icon: IC.users, label: 'My profile' },
     ],
   };
-  return N[role] || [];
+  const list = N[role] || [];
+  if (role === 'admin' || !pages) return list;
+  const kept = list.filter(item => pages.includes(item.to));
+  const existingKeys = new Set(list.map(item => item.to));
+  const added = pages.filter(p => !existingKeys.has(p) && PAGE_NAV_CATALOG[p])
+    .map(p => ({ to: p, ...PAGE_NAV_CATALOG[p] }));
+  return [...kept, ...added];
 }
 
 // view router: route key -> renderer (ctx = {params})
@@ -3376,6 +3458,7 @@ const VIEW = {
     agents: viewAgents, offers: viewOffers, bookkeeping: viewBookkeeping, audit: viewAudit, payments: viewPayments, receipts: viewReceipts,
     team: viewTeam, payroll: viewPayroll,
     products: viewProducts, backups: viewBackups, email: viewMyEmail,
+    permissions: viewPermissions,
   },
   manager: {
     dashboard: viewAdminDashboard, orders: viewOrders, deliveries: viewDeliveries,

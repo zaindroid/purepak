@@ -1131,7 +1131,10 @@ async function viewAgents() {
   const canAdd = ['admin', 'manager'].includes(u.role);
   const canEditRate = ['admin', 'manager', 'finance'].includes(u.role);
   const canSettle = ['admin', 'manager', 'finance'].includes(u.role);
-  const [agents, rows] = await Promise.all([API.agents(), API.commissions({})]);
+  // the roster itself must include deactivated agents too (all=1) — this is
+  // the only screen that can ever show one again to reactivate it; every
+  // other picker (order form, customer assignment) stays active-only
+  const [agents, rows] = await Promise.all([API.agents(true), API.commissions({})]);
   const accrued = rows.filter(r => r.status === 'accrued');
   const paid = rows.filter(r => r.status === 'paid');
   const sum = (a) => a.reduce((s, r) => s + r.amount, 0);

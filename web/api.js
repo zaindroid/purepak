@@ -157,7 +157,7 @@ const API = (() => {
     // settings
     settings: () => g('/settings'),
     saveSettings: (b) => post('/settings', b),
-    agents: () => g('/agents'),
+    agents: (all) => g('/agents' + (all ? '?all=1' : '')),
     createAgent: (b) => post('/agents', b),
     commissions: (params) => { const q = new URLSearchParams(params || {}).toString(); return g('/commissions' + (q ? '?' + q : '')); },
     settleCommission: (id) => patch('/commissions/' + id, {}),

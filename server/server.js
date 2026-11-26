@@ -2302,11 +2302,16 @@ async function handleApi(req, res, url) {
   // ---- agents ----
   if (method === 'GET' && parts[1] === 'agents') {
     permissions.requirePage(user, 'agents');
+    // default is active-only (order forms, customer-assignment pickers should
+    // never offer a deactivated agent); ?all=1 is for the roster itself, which
+    // needs to show a deactivated agent too — otherwise there is no way to
+    // ever see or reactivate one again once it's turned off
+    const all = url.searchParams.get('all') === '1';
     const rows = db.prepare(`SELECT a.*,
       (SELECT COUNT(*) FROM orders o WHERE o.agent_id=a.id AND o.status<>'cancelled') AS orders_count,
       (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.agent_id=a.id AND o.status<>'cancelled') AS sales,
       (SELECT COALESCE(SUM(amount),0) FROM commissions c WHERE c.agent_id=a.id AND c.status='accrued') AS outstanding_commission
-      FROM agents a WHERE a.active=1 ORDER BY a.name`).all();
+      FROM agents a ${all ? '' : 'WHERE a.active=1'} ORDER BY a.name`).all();
     return json(res, 200, rows);
   }
   if (method === 'POST' && parts[1] === 'agents') {

@@ -257,10 +257,16 @@ async function modalCreateOrder(opts = {}) {
         <button type="button" class="btn primary sm block" id="ocNewCustSave">Add &amp; select</button>
       </div>` : ''}`;
   }
+  // whoever isn't the agent/customer themselves may hand-pick a different
+  // agent than the customer's assigned one — shown to any role that can
+  // actually see the agents list, not just admin; soft-fails to hidden for
+  // a role without that permission, same as the agent-cost hint above does
   let agentHtml = '';
-  if (role === 'admin') {
-    const agents = await API.agents();
-    agentHtml = `<div class="field"><span>Commission agent (optional)</span><select id="ocAgent"><option value="">— none —</option>${agents.map(a => `<option value="${a.id}">${API.esc(a.name)} (${a.commission_pct}%)</option>`).join('')}</select></div>`;
+  if (!['agent', 'customer'].includes(role)) {
+    const agents = await API.agents().catch(() => null);
+    if (agents && agents.length) {
+      agentHtml = `<div class="field"><span>Commission agent (optional)</span><select id="ocAgent"><option value="">— use customer's assigned agent, if any —</option>${agents.map(a => `<option value="${a.id}">${API.esc(a.name)} (${a.commission_pct}%)</option>`).join('')}</select></div>`;
+    }
   }
   const agentRates = role === 'agent'
     ? await API.agentPrices(API.user.agent_id).then(rows => Object.fromEntries(rows.map(r => [r.product_id, r.price]))).catch(() => ({}))
@@ -372,10 +378,8 @@ async function modalCreateOrder(opts = {}) {
     });
     if (!body.items.length) return toast('Add at least one item', 'bad');
     body.customer_id = opts.customer ? opts.customer.id : parseInt(document.getElementById('ocCustomer').value);
-    if (role === 'admin') {
-      const ag = document.getElementById('ocAgent');
-      if (ag && ag.value) body.agent_id = +ag.value;
-    }
+    const ag = document.getElementById('ocAgent');
+    if (ag && ag.value) body.agent_id = +ag.value;
     try {
       const o = await API.createOrder(body);
       closeModal(); toast('Order #' + API.orderNo(o) + ' placed', 'ok');
@@ -1220,14 +1224,20 @@ async function viewBookkeeping() {
     API.ledger(),
     API.auditVerify().catch(() => null),
   ]);
-  // running balance is computed oldest → newest; a reversed entry + its reversal
-  // net to zero automatically, so totals stay correct with no special-casing.
+  // Running balance, Income and Expenses all count only "currently true"
+  // entries: a voided/superseded original ('reversed') and the pure
+  // cancellation line a void or correct posts alongside it ('reversal') are
+  // both excluded — they're audit trail, not a second real transaction.
+  // A correction's actual replacement entry keeps counting normally.
   const asc = rows.slice().reverse();
   let bal = 0, income = 0, expense = 0;
   const balById = {};
+  const counts = (r) => r.status !== 'reversed' && r.status !== 'reversal';
   for (const r of asc) {
-    bal += r.type === 'income' ? r.amount : -r.amount;
-    if (r.type === 'income') income += r.amount; else expense += r.amount;
+    if (counts(r)) {
+      bal += r.type === 'income' ? r.amount : -r.amount;
+      if (r.type === 'income') income += r.amount; else expense += r.amount;
+    }
     balById[r.id] = bal;
   }
   const integ = verify
@@ -1237,7 +1247,7 @@ async function viewBookkeeping() {
     : '';
   const entryRow = (r) => {
     const reversed = r.status === 'reversed';
-    const isFix = r.status === 'correction';
+    const isFix = r.status === 'correction' || r.status === 'reversal';
     const tag = reversed ? '<span class="chip cancelled">Voided</span>'
       : isFix ? '<span class="chip approved">Correction</span>' : '';
     const acts = isAdmin && r.status === 'active'
@@ -2718,7 +2728,7 @@ async function viewCustomers() {
       <div class="team-av">${API.esc((c.name[0] || '?').toUpperCase())}</div>
       <div class="team-main">
         <div class="nm">${API.esc(c.name)} <span class="chip ${c.type === 'retail' ? 'pending' : 'approved'}">${c.type}</span></div>
-        <div class="sub">${API.esc(c.contact_name || c.phone || '—')}${c.address ? ' · ' + API.esc(c.address) : ''}${c.orders_count ? ' · ' + V.plural(c.orders_count, 'order') : ''} · spent ${API.fmtMoney(c.total_spent || 0)}${bal > 0 ? ` · <span style="color:var(--red-ink)">owes ${API.fmtMoney(bal)}</span>` : ''}</div>
+        <div class="sub">${API.esc(c.contact_name || c.phone || '—')}${c.address ? ' · ' + API.esc(c.address) : ''}${c.orders_count ? ' · ' + V.plural(c.orders_count, 'order') : ''} · spent ${API.fmtMoney(c.total_spent || 0)}${bal > 0 ? ` · <span style="color:var(--red-ink)">owes ${API.fmtMoney(bal)}</span>` : ''}${canEdit ? ` · ${c.agent_name ? 'agent ' + API.esc(c.agent_name) : '<span class="muted">no agent</span>'}` : ''}</div>
       </div>
       ${canEdit ? `<div class="team-acts"><button class="btn ghost sm" data-act="edit-customer" data-id="${c.id}">Edit</button></div>` : ''}
     </div>`;
@@ -2757,11 +2767,14 @@ async function modalCustomerDetail(id) {
 
 function modalEditCustomer(id) {
   const canChangeType = API.user.role !== 'agent';
-  API.customers().then(rows => {
+  // only plain staff may assign/reassign which agent gets commission on this
+  // customer's orders — never the agent themselves (self-serving), never the
+  // customer (meaningless to them)
+  const canAssignAgent = ['admin', 'manager', 'finance'].includes(API.user.role);
+  Promise.all([API.customers(), API.customerTypes(), canAssignAgent ? API.agents() : []]).then(([rows, types, agents]) => {
     const c = rows.find(x => x.id === id);
     if (!c) return;
-    API.customerTypes().then(types => {
-      openModal('Customer — ' + API.esc(c.name), `
+    openModal('Customer — ' + API.esc(c.name), `
         <div class="modal-bd">
           <label class="muted">Name</label>
           <input id="cuName" class="input" style="width:100%;margin-bottom:10px" value="${API.esc(c.name)}">
@@ -2780,6 +2793,12 @@ function modalEditCustomer(id) {
           <label class="muted">Your negotiated rate (Rs off per bottle, optional)</label>
           <input id="cuDiscount" class="input" style="width:100%" type="number" min="0" step="1" value="${c.discount_amount ? c.discount_amount : ''}" placeholder="e.g. 5">
           <p class="muted" style="font-size:11.5px;margin-top:6px">Applied on top of their type's price on every bottle, every order — shown to them automatically. The gap between this and your own cost (see "New order") is what you earn. Leave blank for no discount.</p>
+          ${canAssignAgent ? `
+          <label class="muted" style="display:block;margin-top:10px">Agent (gets commission on this customer's orders, including ones they place themselves)</label>
+          <select id="cuAgent" class="input" style="width:100%">
+            <option value="">No agent</option>
+            ${agents.map(a => `<option value="${a.id}" ${c.agent_id === a.id ? 'selected' : ''}>${API.esc(a.name)}</option>`).join('')}
+          </select>` : ''}
         </div>`,
         `<button class="btn ghost" data-close-modal>Cancel</button>
          <button class="btn primary" id="cuSave">Save</button>`);
@@ -2797,6 +2816,7 @@ function modalEditCustomer(id) {
           lat: c.lat, lng: c.lng,
         };
         if (canChangeType) b.type = document.getElementById('cuType').value;
+        if (canAssignAgent) b.agent_id = document.getElementById('cuAgent').value || null;
         try {
           await API.updateCustomer(id, b);
           closeModal();
@@ -2804,12 +2824,15 @@ function modalEditCustomer(id) {
           App.refresh();
         } catch (e) { toast(e.message, 'err'); }
       });
-    });
   });
 }
 
 function modalAddCustomer() {
-  API.customerTypes().then(types => {
+  // an agent creating a customer is always assigning that customer to
+  // themselves (see POST /customers) — the picker is only useful, and only
+  // offered, when staff is creating one on someone else's behalf
+  const canAssignAgent = ['admin', 'manager'].includes(API.user.role);
+  Promise.all([API.customerTypes(), canAssignAgent ? API.agents() : []]).then(([types, agents]) => {
     openModal('Add customer', `
       <div class="modal-bd">
         <label class="muted">Business / person name</label>
@@ -2826,6 +2849,12 @@ function modalAddCustomer() {
         <label class="muted">Your negotiated rate (Rs off per bottle, optional)</label>
         <input id="ncDiscount" class="input" style="width:100%" type="number" min="0" step="1" placeholder="e.g. 5">
         <p class="muted" style="font-size:11.5px;margin-top:6px">Applied on top of their type's price on every bottle, every order. The gap between this and your own cost (see "New order") is what you earn. Leave blank for no discount.</p>` : ''}
+        ${canAssignAgent ? `
+        <label class="muted" style="display:block;margin-top:10px">Agent (optional — gets commission on this customer's orders, including ones they place themselves)</label>
+        <select id="ncAgent" class="input" style="width:100%">
+          <option value="">No agent</option>
+          ${agents.map(a => `<option value="${a.id}">${API.esc(a.name)}</option>`).join('')}
+        </select>` : ''}
       </div>`,
       `<button class="btn ghost" data-close-modal>Cancel</button>
        <button class="btn primary" id="ncSubmit">Add customer</button>`);
@@ -2838,6 +2867,8 @@ function modalAddCustomer() {
       };
       const discEl = document.getElementById('ncDiscount');
       if (discEl) b.discount_amount = Number(discEl.value) || 0;
+      const agentEl = document.getElementById('ncAgent');
+      if (agentEl && agentEl.value) b.agent_id = agentEl.value;
       if (!b.name || !b.phone) { toast('Name and phone are required', 'warn'); return; }
       try {
         await API.createCustomer(b);

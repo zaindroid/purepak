@@ -353,7 +353,7 @@ function postLedger(actor, e) {
   const r = db.prepare(`INSERT INTO ledger(account,type,amount,ref,memo,at,status,corrects,entered_by)
                         VALUES (?,?,?,?,?,?,?,?,?)`)
     .run(e.account, e.type, Number(e.amount), e.ref || null, e.memo || null, at,
-      e.corrects ? 'correction' : 'active', e.corrects || null, actor ? actor.name : 'system');
+      e.status || (e.corrects ? 'correction' : 'active'), e.corrects || null, actor ? actor.name : 'system');
   const row = db.prepare('SELECT * FROM ledger WHERE id=?').get(r.lastInsertRowid);
   // the row's own audit line is always a create; void/correct handlers add their
   // own semantic entry on top.
@@ -848,8 +848,8 @@ function kpis() {
   const today = new Date().toISOString().slice(0, 10);
   const month = today.slice(0, 7);
   const todayOrders = db.prepare('SELECT COUNT(*) c FROM orders WHERE date(placed_at)=?').get(today).c;
-  const monthRevenue = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='income' AND strftime('%Y-%m',at)=?`).get(month)]);
-  const monthExpenses = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='expense' AND strftime('%Y-%m',at)=?`).get(month)]);
+  const monthRevenue = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month)]);
+  const monthExpenses = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month)]);
   const outstanding = db.prepare(`SELECT COALESCE(SUM(total-paid),0) v FROM orders WHERE status NOT IN ('cancelled','delivered') AND total>paid`).all()[0].v;
   const unpaidAgent = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM commissions WHERE status='accrued'`).all()[0].v;
   const openOrders = db.prepare(`SELECT COUNT(*) c FROM orders WHERE status IN ('new','confirmed','in_delivery')`).get().c;
@@ -875,8 +875,8 @@ function monthlySeries(months = 6) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const key = d.toISOString().slice(0, 7);
     const label = d.toLocaleString('en', { month: 'short', year: '2-digit' });
-    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND strftime('%Y-%m',at)=?`).get(key).v;
-    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND strftime('%Y-%m',at)=?`).get(key).v;
+    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(key).v;
+    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(key).v;
     out.push({ month: key, label, income: Math.round(inc), expense: Math.round(exp) });
   }
   return out;
@@ -1730,11 +1730,11 @@ async function handleApi(req, res, url) {
                                         FROM customers c WHERE c.agent_id=? OR c.id IN (SELECT DISTINCT customer_id FROM orders WHERE agent_id=?)
                                         ORDER BY c.name`).all(user.agent_id, user.agent_id, user.agent_id, user.agent_id, user.agent_id, user.agent_id));
     }
-    return json(res, 200, db.prepare(`SELECT c.*,
+    return json(res, 200, db.prepare(`SELECT c.*, a.name AS agent_name,
                                       (SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.status<>'cancelled') AS orders_count,
                                       (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id=c.id AND o.status<>'cancelled') AS total_spent,
                                       (SELECT COALESCE(SUM(o.paid),0) FROM orders o WHERE o.customer_id=c.id AND o.status<>'cancelled') AS total_paid
-                                      FROM customers c ORDER BY c.name`).all());
+                                      FROM customers c LEFT JOIN agents a ON a.id=c.agent_id ORDER BY c.name`).all());
   }
   if (method === 'POST' && parts[1] === 'customers') {
     requireRole(user, ['admin', 'manager', 'agent']);
@@ -1750,8 +1750,12 @@ async function handleApi(req, res, url) {
     const discountAmount = Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0;
     // an agent-created customer is theirs from the start — shows up in
     // "My customers" and is editable by them immediately, not just after
-    // their first order (see GET /customers and PATCH /customers below)
-    const ownerAgentId = user.role === 'agent' ? user.agent_id : null;
+    // their first order (see GET /customers and PATCH /customers below).
+    // Staff creating on someone else's behalf may instead hand-pick which
+    // agent this customer belongs to, going forward (an agent can never
+    // assign a customer to anyone but themselves this way).
+    const ownerAgentId = user.role === 'agent' ? user.agent_id
+      : (b.agent_id && db.prepare('SELECT 1 FROM agents WHERE id=?').get(+b.agent_id) ? +b.agent_id : null);
     const r = db.prepare('INSERT INTO customers(name,contact_name,phone,email,address,area,type,lat,lng,discount_amount,agent_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
       .run(b.name, b.contact_name || null, b.phone, b.email || null, b.address || null, b.area || null, type,
         null, null, discountAmount, ownerAgentId);
@@ -1781,6 +1785,13 @@ async function handleApi(req, res, url) {
     const wantDiscount = !ownRecord && b.discount_amount !== undefined
       ? (Number(b.discount_amount) > 0 ? Number(b.discount_amount) : 0)
       : cur.discount_amount;
+    // which agent this customer belongs to — plain staff only (admin/manager/
+    // finance), never the customer themselves and never an agent (an agent
+    // reassigning away from or onto themselves would be self-serving). Send
+    // agent_id: null to unassign; an unrecognised id is ignored, not stored.
+    const wantAgentId = (!ownRecord && !isAgentOwner && b.agent_id !== undefined)
+      ? (b.agent_id ? (db.prepare('SELECT 1 FROM agents WHERE id=?').get(+b.agent_id) ? +b.agent_id : cur.agent_id) : null)
+      : cur.agent_id;
     const cLat = b.lat, cLng = b.lng;
     const requestedLatLng = typeof cLat === 'number' && typeof cLng === 'number' &&
       Number.isFinite(cLat) && Number.isFinite(cLng) && Math.abs(cLat) <= 90 && Math.abs(cLng) <= 180;
@@ -1796,7 +1807,7 @@ async function handleApi(req, res, url) {
     // editing; staff fixing a typo'd address shouldn't silently wipe a
     // pin they were never allowed to touch in the first place
     const shouldClearPin = ownRecord && b.address !== undefined && b.address !== cur.address && !hasLatLng;
-    db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=?, lat=?, lng=?, discount_amount=? WHERE id=?`)
+    db.prepare(`UPDATE customers SET name=?, contact_name=?, phone=?, email=?, address=?, area=?, type=?, lat=?, lng=?, discount_amount=?, agent_id=? WHERE id=?`)
       .run(ownRecord ? cur.name : (b.name != null ? String(b.name).trim() || cur.name : cur.name),
         b.contact_name !== undefined ? (b.contact_name || null) : cur.contact_name,
         b.phone != null ? String(b.phone).trim() || cur.phone : cur.phone,
@@ -1807,6 +1818,7 @@ async function handleApi(req, res, url) {
         hasLatLng ? cLat : (shouldClearPin ? null : cur.lat),
         hasLatLng ? cLng : (shouldClearPin ? null : cur.lng),
         wantDiscount,
+        wantAgentId,
         cid);
     b.type = wantType; // downstream checks use b.type
     sseSendMany(officeUserIds().filter(x => x !== user.id), 'customer'); // office only
@@ -1946,9 +1958,14 @@ async function handleApi(req, res, url) {
       return [p.id, qty, price, qty * price];
     });
     if (!prepared.length) return err(res, 400, 'At least one item required');
-    let agentId = b.agent_id || null;
-    if (user.role === 'agent') agentId = user.agent_id;
-    if (user.role === 'customer' && agentId) agentId = b.agent_id; // admin/agent pick; customer optional
+    // whose sale this is, for commission: an agent placing it is always
+    // crediting themselves; anyone else — staff on the customer's behalf, or
+    // the customer ordering for themselves — credits whoever was explicitly
+    // picked on the order form, falling back to whichever agent that
+    // customer is permanently assigned to (set via Customers → Edit). That
+    // fallback matters most for self-serve orders, where there's no agent
+    // picker to begin with, but applies the same way when staff places one.
+    const agentId = user.role === 'agent' ? user.agent_id : (b.agent_id || cust.agent_id || null);
     const method = PAY_METHOD_IDS.has(b.payment_method) ? b.payment_method : 'cod';
     const r = db.prepare('INSERT INTO orders(customer_id,agent_id,status,total,paid,payment_status,payment_method,notes,discount_amount) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(custId, agentId, 'new', total, 0, 'unpaid', method, b.notes || null, cust.discount_amount || 0);
@@ -2458,11 +2475,11 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && parts[1] === 'ledger' && parts[2] === 'summary') {
     permissions.requirePage(user, 'bookkeeping');
     const month = url.searchParams.get('month') || new Date().toISOString().slice(0, 7);
-    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND strftime('%Y-%m',at)=?`).get(month).v;
-    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND strftime('%Y-%m',at)=?`).get(month).v;
-    const allInc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income'`).get().v;
-    const allExp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense'`).get().v;
-    const byAccount = db.prepare(`SELECT account, type, SUM(amount) total FROM ledger WHERE strftime('%Y-%m',at)=? GROUP BY account, type ORDER BY total DESC`).all(month);
+    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month).v;
+    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month).v;
+    const allInc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal')`).get().v;
+    const allExp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal')`).get().v;
+    const byAccount = db.prepare(`SELECT account, type, SUM(amount) total FROM ledger WHERE status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=? GROUP BY account, type ORDER BY total DESC`).all(month);
     return json(res, 200, {
       month, month_income: Math.round(inc), month_expense: Math.round(exp), month_net: Math.round(inc - exp),
       all_time_income: Math.round(allInc), all_time_expense: Math.round(allExp), all_time_net: Math.round(allInc - allExp),
@@ -2486,9 +2503,13 @@ async function handleApi(req, res, url) {
     const reason = String(b.reason || '').trim();
     if (reason.length < 3) return err(res, 400, 'A reason is required to void an entry');
     db.prepare(`UPDATE ledger SET status='reversed', void_reason=? WHERE id=?`).run(reason, cur.id);
+    // the reversal is a pure audit-trail artifact, not a new economic event —
+    // it and the row it cancels are both excluded from Income/Expense/Net
+    // totals (see ledgerSummary, kpis, monthlySeries) so voiding a mistaken
+    // entry actually zeroes it out instead of inflating both sides of the books
     const rev = postLedger(user, {
       account: cur.account, type: cur.type === 'income' ? 'expense' : 'income',
-      amount: cur.amount, ref: cur.ref, corrects: cur.id,
+      amount: cur.amount, ref: cur.ref, corrects: cur.id, status: 'reversal',
       memo: `Reversal of entry #${cur.id} — ${reason}`,
     });
     audit(user, 'ledger.void', 'ledger', cur.id,
@@ -2509,9 +2530,12 @@ async function handleApi(req, res, url) {
     const account = String(b.account || cur.account).trim();
     if (!account || !(amount > 0)) return err(res, 400, 'Valid account and positive amount required');
     db.prepare(`UPDATE ledger SET status='reversed', void_reason=? WHERE id=?`).run('Corrected: ' + reason, cur.id);
+    // same reasoning as void() above: the reversal half is a pure audit
+    // artifact (excluded from totals); the fixed entry is the real, ongoing
+    // one and counts normally
     const rev = postLedger(user, {
       account: cur.account, type: cur.type === 'income' ? 'expense' : 'income',
-      amount: cur.amount, ref: cur.ref, corrects: cur.id,
+      amount: cur.amount, ref: cur.ref, corrects: cur.id, status: 'reversal',
       memo: `Reversal of entry #${cur.id} (correction) — ${reason}`,
     });
     const fixed = postLedger(user, {

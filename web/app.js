@@ -1008,8 +1008,12 @@ const App = {
         } catch (e) { this.toast(e.message, 'err'); }
         break;
       case 'agent-save': stop(); {
-        const pctInput = document.getElementById(ds['pct-input']);
-        const b = { active: ds['target-active'] === '1' };
+        // ds is the button's native DOM dataset, which camelCases attribute
+        // names (data-pct-input -> ds.pctInput) — bracket access with the
+        // literal hyphenated string was always undefined, so this silently
+        // sent { active: false } on every click, Activate included
+        const pctInput = document.getElementById(ds.pctInput);
+        const b = { active: ds.targetActive === '1' };
         if (pctInput) {
           const v = Number(pctInput.value);
           if (isNaN(v) || v < 0 || v > 50) { this.toast('Commission must be 0-50', 'err'); return; }

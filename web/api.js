@@ -64,9 +64,11 @@ const API = (() => {
     users: () => g('/users'),
     createUser: (b) => post('/users', b),
     updateUser: (id, b) => patch('/users/' + id, b),
+    deleteUser: (id) => del('/users/' + id),
     resetUserPassword: (id) => post('/users/' + id + '/reset-password', {}),
     // agents / customers / products / pricing
     updateAgent: (id, b) => patch('/agents/' + id, b),
+    deleteAgent: (id) => del('/agents/' + id),
     agentPrices: (agentId) => g('/agent-prices' + (agentId ? '?agent_id=' + agentId : '')),
     saveAgentPrices: (agentId, rows) => post('/agent-prices', { agent_id: agentId, rows }),
     updateCustomer: (id, b) => patch('/customers/' + id, b),

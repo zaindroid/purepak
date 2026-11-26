@@ -1155,7 +1155,8 @@ async function viewAgents() {
         <button class="btn sm ${a.active ? 'ghost' : 'primary'}" data-act="agent-save" data-id="${a.id}" data-pct-input="agPct${a.id}" data-target-active="${a.active ? 0 : 1}">${a.active ? 'Deactivate' : 'Activate'}</button>
       </div>` : `<div style="font-weight:800">${a.commission_pct}%</div>`}
       <div class="muted" style="font-size:11px;margin-top:3px">due ${API.fmtMoney(a.outstanding_commission)}</div>
-      ${canAdd ? `<button class="btn ghost sm" style="margin-top:6px" data-act="agent-rates" data-id="${a.id}" data-name="${API.esc(a.name)}">Set rates</button>` : ''}
+      ${canAdd ? `<button class="btn ghost sm" style="margin-top:6px" data-act="agent-rates" data-id="${a.id}" data-name="${API.esc(a.name)}">Set rates</button>
+      <button class="btn ghost sm" style="margin-top:6px" data-act="delete-agent" data-id="${a.id}" data-name="${API.esc(a.name)}">Remove</button>` : ''}
     </div>
   </div>`).join('')}
   <div class="sec-t">Commission ledger</div>
@@ -1227,15 +1228,15 @@ async function viewBookkeeping() {
     API.ledger(),
     API.auditVerify().catch(() => null),
   ]);
-  // Running balance, Income and Expenses all count only "currently true"
-  // entries: a voided/superseded original ('reversed') and the pure
-  // cancellation line a void or correct posts alongside it ('reversal') are
-  // both excluded — they're audit trail, not a second real transaction.
-  // A correction's actual replacement entry keeps counting normally.
+  // Simple rule: Income = every income entry not voided. Expense = every
+  // expense entry not voided. Net = Income − Expense. A voided entry (and
+  // the one it was corrected into, if any) is the only thing excluded —
+  // nothing is ever double-counted or needs to "cancel out" against
+  // anything else.
   const asc = rows.slice().reverse();
   let bal = 0, income = 0, expense = 0;
   const balById = {};
-  const counts = (r) => r.status !== 'reversed' && r.status !== 'reversal';
+  const counts = (r) => r.status !== 'reversed';
   for (const r of asc) {
     if (counts(r)) {
       bal += r.type === 'income' ? r.amount : -r.amount;
@@ -1250,7 +1251,7 @@ async function viewBookkeeping() {
     : '';
   const entryRow = (r) => {
     const reversed = r.status === 'reversed';
-    const isFix = r.status === 'correction' || r.status === 'reversal';
+    const isFix = r.status === 'correction';
     const tag = reversed ? '<span class="chip cancelled">Voided</span>'
       : isFix ? '<span class="chip approved">Correction</span>' : '';
     const acts = isAdmin && r.status === 'active'
@@ -1269,7 +1270,7 @@ async function viewBookkeeping() {
   };
   return `
   <div class="page-head"><h1>Bookkeeping</h1><button class="btn sm" data-act="add-expense">+ Expense</button><button class="btn primary sm" data-act="add-income">+ Income</button></div>
-  <p class="muted" style="font-size:12.5px;margin:6px 0 10px">Every money movement in one place — sales, purchases, payroll, commissions and scanned receipts. Entries are <b>append-only</b>: a mistake is fixed with a reversing entry, never edited or deleted${isAdmin ? ' (admin-only)' : ''}.</p>
+  <p class="muted" style="font-size:12.5px;margin:6px 0 10px">Every money movement in one place — sales, purchases, payroll, commissions and scanned receipts. Nothing is ever edited or deleted: a mistake is marked <b>Voided</b> (crossed out below, with your reason) and simply stops counting toward Income, Expenses and Balance${isAdmin ? ' (admin-only)' : ''}.</p>
   ${integ}
   <div class="grid kpis">
     ${V.kpiCard('Balance', API.fmtMoney(bal), bal >= 0 ? 'account position' : 'in the red', bal >= 0 ? 'good' : 'bad')}
@@ -1559,7 +1560,7 @@ function modalVoidLedger(id) {
     const r = rows.find(x => x.id === id);
     if (!r) return toast('Entry not found', 'err');
     openModal('Void entry #' + r.id, `
-      <p class="muted" style="font-size:13px;margin:0 0 12px;line-height:1.5">This posts a <b>reversing entry</b> that cancels this one out. Nothing is deleted — both stay in the books with an audit record.</p>
+      <p class="muted" style="font-size:13px;margin:0 0 12px;line-height:1.5">This marks the entry <b>Voided</b> with your reason below. It's never deleted — it stays visible, crossed out — but stops counting toward Income, Expenses and Balance from now on.</p>
       <div class="item-line"><span>${API.esc(r.account)} · ${API.esc(r.memo || '')}</span><b style="color:${r.type === 'income' ? 'var(--green-ink)' : 'var(--red-ink)'}">${r.type === 'income' ? '+' : '−'} ${API.fmtMoney(r.amount)}</b></div>
       <label class="muted" style="display:block;margin-top:12px">Reason (required — shown in the audit trail)</label>
       <textarea id="voidReason" class="input" style="width:100%;min-height:70px" placeholder="e.g. duplicate of receipt #14, wrong amount entered"></textarea>`,
@@ -1578,7 +1579,7 @@ function modalCorrectLedger(id) {
     const r = rows.find(x => x.id === id);
     if (!r) return toast('Entry not found', 'err');
     openModal('Correct entry #' + r.id, `
-      <p class="muted" style="font-size:13px;margin:0 0 12px;line-height:1.5">The original is reversed and a corrected entry is posted in its place. Both the reversal and the new entry are audited.</p>
+      <p class="muted" style="font-size:13px;margin:0 0 12px;line-height:1.5">The old entry is marked <b>Voided</b> (crossed out, stops counting) and a new one is posted with the corrected details below. Both stay visible and audited.</p>
       <label class="muted">Account</label>
       <input id="corAccount" class="input" style="width:100%;margin-bottom:8px" value="${API.esc(r.account)}">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
@@ -2548,6 +2549,7 @@ async function viewTeam() {
     else if (r.status === 'disabled') acts.push(`<button class="btn ghost sm" data-act="team-activate" data-id="${r.id}">Re-activate</button>`);
     if (r.role !== 'customer' && canTouch) acts.push(`<button class="btn ghost sm" data-act="team-edit" data-id="${r.id}">Edit</button>`);
     if (canTouch) acts.push(`<button class="btn ghost sm" data-act="team-resetpw" data-id="${r.id}">Reset pw</button>`);
+    if (r.role !== 'customer' && canTouch) acts.push(`<button class="btn ghost sm" data-act="team-delete" data-id="${r.id}" data-name="${API.esc(r.name)}">Remove</button>`);
     const hasFoot = r.salary || acts.length;
     return `<div class="team-row">
       <div class="team-av">${API.esc((r.name[0] || '?').toUpperCase())}</div>

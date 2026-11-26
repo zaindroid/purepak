@@ -353,7 +353,7 @@ function postLedger(actor, e) {
   const r = db.prepare(`INSERT INTO ledger(account,type,amount,ref,memo,at,status,corrects,entered_by)
                         VALUES (?,?,?,?,?,?,?,?,?)`)
     .run(e.account, e.type, Number(e.amount), e.ref || null, e.memo || null, at,
-      e.status || (e.corrects ? 'correction' : 'active'), e.corrects || null, actor ? actor.name : 'system');
+      e.corrects ? 'correction' : 'active', e.corrects || null, actor ? actor.name : 'system');
   const row = db.prepare('SELECT * FROM ledger WHERE id=?').get(r.lastInsertRowid);
   // the row's own audit line is always a create; void/correct handlers add their
   // own semantic entry on top.
@@ -848,8 +848,8 @@ function kpis() {
   const today = new Date().toISOString().slice(0, 10);
   const month = today.slice(0, 7);
   const todayOrders = db.prepare('SELECT COUNT(*) c FROM orders WHERE date(placed_at)=?').get(today).c;
-  const monthRevenue = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month)]);
-  const monthExpenses = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month)]);
+  const monthRevenue = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='income' AND status<>'reversed' AND strftime('%Y-%m',at)=?`).get(month)]);
+  const monthExpenses = money([db.prepare(`SELECT SUM(amount) v FROM ledger WHERE type='expense' AND status<>'reversed' AND strftime('%Y-%m',at)=?`).get(month)]);
   const outstanding = db.prepare(`SELECT COALESCE(SUM(total-paid),0) v FROM orders WHERE status NOT IN ('cancelled','delivered') AND total>paid`).all()[0].v;
   const unpaidAgent = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM commissions WHERE status='accrued'`).all()[0].v;
   const openOrders = db.prepare(`SELECT COUNT(*) c FROM orders WHERE status IN ('new','confirmed','in_delivery')`).get().c;
@@ -875,8 +875,8 @@ function monthlySeries(months = 6) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const key = d.toISOString().slice(0, 7);
     const label = d.toLocaleString('en', { month: 'short', year: '2-digit' });
-    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(key).v;
-    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(key).v;
+    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status<>'reversed' AND strftime('%Y-%m',at)=?`).get(key).v;
+    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status<>'reversed' AND strftime('%Y-%m',at)=?`).get(key).v;
     out.push({ month: key, label, income: Math.round(inc), expense: Math.round(exp) });
   }
   return out;
@@ -1554,6 +1554,27 @@ async function handleApi(req, res, url) {
     }
     const u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
     return json(res, 200, userView(u));
+  }
+  if (method === 'DELETE' && parts[1] === 'users' && parts.length === 3 && !isNaN(+parts[2])) {
+    if (!canManage) return err(res, 403, 'Forbidden');
+    const id = +parts[2];
+    const cur = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+    if (!cur || (isMasterAccount(cur) && !isMasterAccount(user))) return err(res, 404, 'User not found');
+    if (cur.id === user.id) return err(res, 400, 'You cannot delete your own account');
+    if (cur.role === 'admin' && db.prepare(`SELECT COUNT(*) c FROM users WHERE role='admin'`).get().c <= 1)
+      return err(res, 400, 'Cannot delete the last admin');
+    // production/payroll/vehicle-trip history must survive even once the
+    // account is gone — Disable is the right tool there, same reasoning as
+    // the agent and product delete guards above
+    const hasHistory = db.prepare('SELECT COUNT(*) c FROM production_entries WHERE labour_user_id=?').get(id).c
+      || db.prepare('SELECT COUNT(*) c FROM payroll WHERE user_id=?').get(id).c
+      || db.prepare('SELECT COUNT(*) c FROM vehicle_logs WHERE driver_user_id=?').get(id).c;
+    if (hasHistory) return err(res, 400, "Can't delete — this account has production, payroll, or vehicle-trip history tied to it. Use Disable instead to remove their access without losing that record.");
+    db.prepare('DELETE FROM users WHERE id=?').run(id);
+    audit(user, 'user.delete', 'user', id, `${cur.name} (${cur.role}) removed by ${user.name}.`, cur, null);
+    notify(staffUserIds().filter(x => x !== user.id), 'team', 'Employee removed',
+      `${cur.name} (${cur.role}) was removed by ${user.name}.`);
+    return json(res, 200, { ok: true });
   }
   if (method === 'POST' && parts[1] === 'users' && parts.length === 4 && parts[3] === 'reset-password') {
     if (!canManage) return err(res, 403, 'Forbidden');
@@ -2350,6 +2371,25 @@ async function handleApi(req, res, url) {
     }
     return json(res, 200, db.prepare('SELECT * FROM agents WHERE id=?').get(+parts[2]));
   }
+  if (method === 'DELETE' && parts[1] === 'agents' && parts.length === 3 && !isNaN(+parts[2])) {
+    requireRole(user, ['admin', 'manager']);
+    const aid = +parts[2];
+    const cur = db.prepare('SELECT * FROM agents WHERE id=?').get(aid);
+    if (!cur) return err(res, 404, 'Agent not found');
+    // same reasoning as DELETE /products: real history must survive even
+    // once the agent is gone, so a hard delete is only safe when there's
+    // nothing to lose — Deactivate is the right tool otherwise
+    const hasHistory = db.prepare('SELECT COUNT(*) c FROM orders WHERE agent_id=?').get(aid).c
+      || db.prepare('SELECT COUNT(*) c FROM commissions WHERE agent_id=?').get(aid).c;
+    if (hasHistory) return err(res, 400, "Can't delete — this agent has order/commission history. Use Deactivate instead to keep that record.");
+    const assigned = db.prepare('SELECT COUNT(*) c FROM customers WHERE agent_id=?').get(aid).c;
+    if (assigned) return err(res, 400, `Can't delete — ${assigned} customer(s) are still assigned to this agent. Reassign them first (Customers → Edit).`);
+    const linkedLogin = db.prepare(`SELECT COUNT(*) c FROM users WHERE agent_id=? AND role='agent'`).get(aid).c;
+    if (linkedLogin) return err(res, 400, "Can't delete — this agent has a linked team login. Remove that from Team first.");
+    db.prepare('DELETE FROM agents WHERE id=?').run(aid);
+    audit(user, 'agent.delete', 'agent', aid, `Agent removed: ${cur.name} (by ${user.name}).`, cur, null);
+    return json(res, 200, { ok: true });
+  }
 
   // ---- commissions ----
   if (method === 'GET' && parts[1] === 'commissions') {
@@ -2480,11 +2520,11 @@ async function handleApi(req, res, url) {
   if (method === 'GET' && parts[1] === 'ledger' && parts[2] === 'summary') {
     permissions.requirePage(user, 'bookkeeping');
     const month = url.searchParams.get('month') || new Date().toISOString().slice(0, 7);
-    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month).v;
-    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=?`).get(month).v;
-    const allInc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status NOT IN ('reversed','reversal')`).get().v;
-    const allExp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status NOT IN ('reversed','reversal')`).get().v;
-    const byAccount = db.prepare(`SELECT account, type, SUM(amount) total FROM ledger WHERE status NOT IN ('reversed','reversal') AND strftime('%Y-%m',at)=? GROUP BY account, type ORDER BY total DESC`).all(month);
+    const inc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status<>'reversed' AND strftime('%Y-%m',at)=?`).get(month).v;
+    const exp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status<>'reversed' AND strftime('%Y-%m',at)=?`).get(month).v;
+    const allInc = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='income' AND status<>'reversed'`).get().v;
+    const allExp = db.prepare(`SELECT COALESCE(SUM(amount),0) v FROM ledger WHERE type='expense' AND status<>'reversed'`).get().v;
+    const byAccount = db.prepare(`SELECT account, type, SUM(amount) total FROM ledger WHERE status<>'reversed' AND strftime('%Y-%m',at)=? GROUP BY account, type ORDER BY total DESC`).all(month);
     return json(res, 200, {
       month, month_income: Math.round(inc), month_expense: Math.round(exp), month_net: Math.round(inc - exp),
       all_time_income: Math.round(allInc), all_time_expense: Math.round(allExp), all_time_net: Math.round(allInc - allExp),
@@ -2507,20 +2547,15 @@ async function handleApi(req, res, url) {
     const b = await readBody(req);
     const reason = String(b.reason || '').trim();
     if (reason.length < 3) return err(res, 400, 'A reason is required to void an entry');
+    // Voiding just marks the entry reversed, with the reason kept on it.
+    // No second "reversal" line — it stays visible in the list (struck
+    // through, reason shown) but is simply excluded from Income/Expense/Net
+    // from here on. One click, one entry changes state, nothing to reconcile.
     db.prepare(`UPDATE ledger SET status='reversed', void_reason=? WHERE id=?`).run(reason, cur.id);
-    // the reversal is a pure audit-trail artifact, not a new economic event —
-    // it and the row it cancels are both excluded from Income/Expense/Net
-    // totals (see ledgerSummary, kpis, monthlySeries) so voiding a mistaken
-    // entry actually zeroes it out instead of inflating both sides of the books
-    const rev = postLedger(user, {
-      account: cur.account, type: cur.type === 'income' ? 'expense' : 'income',
-      amount: cur.amount, ref: cur.ref, corrects: cur.id, status: 'reversal',
-      memo: `Reversal of entry #${cur.id} — ${reason}`,
-    });
     audit(user, 'ledger.void', 'ledger', cur.id,
       `Voided entry #${cur.id} (${cur.type === 'income' ? '+' : '−'} Rs ${Math.round(cur.amount)} · ${cur.account}) — ${reason}`,
-      cur, { status: 'reversed', reversal_entry: rev.id });
-    return json(res, 200, { voided: cur.id, reversal: rev });
+      cur, { status: 'reversed' });
+    return json(res, 200, { voided: cur.id });
   }
   if (method === 'POST' && parts[1] === 'ledger' && parts.length === 4 && parts[3] === 'correct' && !isNaN(+parts[2])) {
     requireRole(user, ['admin']);
@@ -2534,15 +2569,11 @@ async function handleApi(req, res, url) {
     const amount = Number(b.amount);
     const account = String(b.account || cur.account).trim();
     if (!account || !(amount > 0)) return err(res, 400, 'Valid account and positive amount required');
+    // Correcting marks the old entry reversed (same as void, with its own
+    // reason) and posts exactly one new entry with the fixed values — old
+    // one excluded from totals, new one counted normally. No separate
+    // "reversal" line; two entries total, not three.
     db.prepare(`UPDATE ledger SET status='reversed', void_reason=? WHERE id=?`).run('Corrected: ' + reason, cur.id);
-    // same reasoning as void() above: the reversal half is a pure audit
-    // artifact (excluded from totals); the fixed entry is the real, ongoing
-    // one and counts normally
-    const rev = postLedger(user, {
-      account: cur.account, type: cur.type === 'income' ? 'expense' : 'income',
-      amount: cur.amount, ref: cur.ref, corrects: cur.id, status: 'reversal',
-      memo: `Reversal of entry #${cur.id} (correction) — ${reason}`,
-    });
     const fixed = postLedger(user, {
       account, type, amount, ref: cur.ref, corrects: cur.id,
       memo: (b.memo && String(b.memo).trim()) || cur.memo || `Corrected entry #${cur.id}`,
@@ -2550,8 +2581,8 @@ async function handleApi(req, res, url) {
     audit(user, 'ledger.correct', 'ledger', cur.id,
       `Corrected entry #${cur.id} — ${reason}`,
       { account: cur.account, type: cur.type, amount: cur.amount, memo: cur.memo },
-      { account, type, amount, memo: fixed.memo, reversal_entry: rev.id, new_entry: fixed.id });
-    return json(res, 200, { corrected: cur.id, reversal: rev, entry: fixed });
+      { account, type, amount, memo: fixed.memo, new_entry: fixed.id });
+    return json(res, 200, { corrected: cur.id, entry: fixed });
   }
   // --- audit trail (hash-chained) ---
   if (method === 'GET' && parts[1] === 'audit' && parts[2] === 'verify') {

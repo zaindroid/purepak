@@ -971,6 +971,12 @@ const App = {
           } catch (e) { this.toast(e.message, 'err'); }
         }
         break;
+      case 'team-delete': stop();
+        if (await confirmDialog({ title: 'Remove employee', message: `This permanently removes "${name}"'s account. If they have production, payroll, or vehicle-trip history, removal is blocked — use Disable instead.`, okLabel: 'Remove', danger: true })) {
+          try { await API.deleteUser(+id); this.toast('Employee removed'); this.refresh(); }
+          catch (e) { this.toast(e.message, 'err'); }
+        }
+        break;
       case 'payroll-generate': stop();
         try {
           const period = (document.getElementById('payPeriod') || {}).value || new Date().toISOString().slice(0, 7);
@@ -1024,6 +1030,12 @@ const App = {
           this.toast('Agent updated'); this.refresh();
         } catch (e) { this.toast(e.message, 'err'); }
       }
+        break;
+      case 'delete-agent': stop();
+        if (await confirmDialog({ title: 'Remove agent', message: `This permanently removes "${name}". If they have any order/commission history, assigned customers, or a linked team login, removal is blocked — use Deactivate instead.`, okLabel: 'Remove', danger: true })) {
+          try { await API.deleteAgent(+id); this.toast('Agent removed'); this.refresh(); }
+          catch (e) { this.toast(e.message, 'err'); }
+        }
         break;
       case 'save-matrix': stop(); {
         const rows = [];
